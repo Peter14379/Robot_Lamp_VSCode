@@ -1,0 +1,753 @@
+
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Robot Lamp Dashboard | DIRECT MOVE V2.2</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#090d14;color:#e9eff8;font-family:Arial,sans-serif}
+.container{max-width:1200px;margin:auto;padding:24px}
+header{display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap;margin-bottom:20px}
+h1{margin:0 0 8px;font-size:27px}
+.subtitle{margin:0;color:#98a7bd}
+.version{display:inline-block;margin-top:8px;font-size:12px;font-weight:bold;color:#72c3fb}
+.status{padding:12px 16px;border-radius:10px;background:#432522;color:#ffaaaa;font-size:13px}
+.notice{padding:14px 16px;background:#151f2e;border:1px solid #2b3b53;border-radius:12px;margin-bottom:18px;color:#afc3dc;font-size:13px;line-height:1.7}
+.servo-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}
+.servo-card{background:#151b26;border:1px solid #2b3546;border-radius:16px;padding:20px;min-width:0}
+.servo-top{display:flex;justify-content:space-between;align-items:center}
+.servo-title{font-size:20px;font-weight:bold}
+.servo-dot{width:10px;height:10px;border-radius:50%;background:#dc6868}
+.actual-label{margin-top:18px;font-size:13px;color:#9aacbf}
+.actual{margin:5px 0 18px;font-size:33px;font-weight:bold}
+.actual .unit{color:#9aacbf;font-size:15px;font-weight:normal}
+.info-grid,.telemetry-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin-bottom:12px}
+.telemetry-grid{margin-bottom:20px}
+.info-box,.telemetry-box{padding:12px 8px;text-align:center;border-radius:10px;background:#202a3a;min-width:0}
+.telemetry-box{background:#101c2c;border:1px solid #293b50}
+.info-label{color:#9aacbf;font-size:12px;margin-bottom:7px}
+.info-value{font-size:19px;font-weight:bold;overflow-wrap:anywhere}
+.telemetry-value{color:#70e4a0;font-size:17px;font-weight:bold;overflow-wrap:anywhere}
+.target-label{display:block;margin:18px 0 8px;color:#c2cee0;font-size:14px}
+.target-input{width:100%;padding:14px;border:1px solid #43516a;border-radius:9px;background:#0d131e;color:white;font-size:20px}
+.target-input:focus{outline:2px solid #4598e9}
+.controls{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}
+button{padding:14px;border:0;border-radius:9px;font-size:14px;font-weight:bold;cursor:pointer}
+.btn-move{background:#327cce;color:white}
+.btn-zero{background:#34435a;color:white}
+button:hover:not(:disabled){filter:brightness(1.14)}
+button:disabled,input:disabled{opacity:.45;cursor:not-allowed}
+.hint{color:#9aacbf;margin-top:14px;font-size:12px;line-height:1.7}
+.message{display:none;margin-top:12px;padding:10px 12px;border-radius:9px;font-size:13px;line-height:1.6;overflow-wrap:anywhere}
+.message.show{display:block}
+.message.ok{background:#123c2e;color:#8ef0b5}
+.message.error{background:#4b2329;color:#ffc0c0}
+.message.info{background:#183249;color:#a8d5ff}
+@media(max-width:700px){.container{padding:14px}.servo-grid{grid-template-columns:1fr}h1{font-size:22px}}
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <div>
+      <h1>Robot Lamp Dashboard</h1>
+      <p class="subtitle">SCS15 Servo Control &amp; Real-time Monitoring</p>
+      <span class="version">DIRECT MOVE V2.2 | Single Command</span>
+    </div>
+    <div class="status" id="connection-status">CONNECTING...</div>
+  </header>
+  <div class="notice" id="system-notice">กำลังเชื่อมต่อ ESP32</div>
+  <div class="servo-grid" id="servo-grid"></div>
+</div>
+
+<script>
+"use strict";
+
+// DIRECT MOVE V2.2: one target = one command to ESP32.
+// Requires MAX_MOVE_STEP = 150 in both app.py and main.cpp.
+// Mechanical clearances must be checked independently.
+
+const SERVO_IDS = [1,2,3,4];
+const SAFE_MARGIN = 20;
+const MAX_DIRECT_MOVE = 150;
+const REACHED_TOLERANCE = 8;
+const FEEDBACK_TIMEOUT_MS = 30000;
+const POLL_MS = 2000;
+
+const byId = id => document.getElementById(id);
+const isInt = value => Number.isInteger(value);
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+const servos = SERVO_IDS.map(id => ({
+  id, actual:null, min:null, max:null, zero:null, relative:null,
+  voltage:null, temperature:null, online:false, initialized:false,
+  saving:false
+}));
+
+let connected = false;
+let infoReady = false;
+let serverMoveBusy = false;
+let directMoveBusy = false;
+let directMoveServoId = null;
+let refreshing = false;
+
+// ==========================================
+// HELPERS
+// ==========================================
+
+function getServo(id){
+  return servos.find(s => s.id === Number(id));
+}
+
+function validLimits(s){
+  return isInt(s.min) && isInt(s.max) &&
+         s.min >= 0 && s.min < s.max &&
+         s.max <= 1023;
+}
+
+function safeRange(s){
+  return [s.min + SAFE_MARGIN, s.max - SAFE_MARGIN];
+}
+
+function isReady(s){
+  return connected && infoReady && s.online &&
+         isInt(s.actual) && validLimits(s) &&
+         s.actual >= s.min &&
+         s.actual <= s.max &&
+         s.max - s.min > 2 * SAFE_MARGIN;
+}
+
+function setText(id,value){
+  byId(id).textContent = value;
+}
+
+function fmtRelative(value){
+  return isInt(value)
+    ? `${value > 0 ? "+" : ""}${value} ticks`
+    : "—";
+}
+
+function showMessage(id,text,type="info"){
+  const element = byId(`message-${id}`);
+  element.textContent = text;
+  element.className = `message show ${type}`;
+}
+
+// ==========================================
+// CREATE SERVO CARDS
+// ==========================================
+
+function createCards(){
+  byId("servo-grid").innerHTML = servos.map(s => `
+    <section class="servo-card">
+      <div class="servo-top">
+        <div class="servo-title">Servo ${s.id}</div>
+        <div class="servo-dot" id="dot-${s.id}"></div>
+      </div>
+
+      <div class="actual-label">
+        Actual Position (ตำแหน่งจริงล่าสุด)
+      </div>
+      <div class="actual">
+        <span id="actual-${s.id}">—</span>
+        <span class="unit">ticks</span>
+      </div>
+
+      <div class="info-grid">
+        <div class="info-box">
+          <div class="info-label">MIN</div>
+          <div class="info-value" id="min-${s.id}">—</div>
+        </div>
+        <div class="info-box">
+          <div class="info-label">MAX</div>
+          <div class="info-value" id="max-${s.id}">—</div>
+        </div>
+        <div class="info-box">
+          <div class="info-label">ZERO</div>
+          <div class="info-value" id="zero-${s.id}">—</div>
+        </div>
+      </div>
+
+      <div class="telemetry-grid">
+        <div class="telemetry-box">
+          <div class="info-label">VOLTAGE</div>
+          <div class="telemetry-value" id="voltage-${s.id}">—</div>
+        </div>
+        <div class="telemetry-box">
+          <div class="info-label">TEMP</div>
+          <div class="telemetry-value" id="temp-${s.id}">—</div>
+        </div>
+        <div class="telemetry-box">
+          <div class="info-label">RELATIVE</div>
+          <div class="telemetry-value" id="relative-${s.id}">—</div>
+        </div>
+      </div>
+
+      <label class="target-label" for="target-${s.id}">
+        Target Position (ticks)
+      </label>
+      <input
+        class="target-input"
+        type="number"
+        id="target-${s.id}"
+        step="1"
+        placeholder="รอข้อมูล Servo"
+        disabled
+      >
+
+      <div class="controls">
+        <button
+          class="btn-move"
+          id="move-${s.id}"
+          onclick="moveServo(${s.id})"
+          disabled
+        >MOVE SERVO</button>
+        <button
+          class="btn-zero"
+          id="zero-btn-${s.id}"
+          onclick="setZero(${s.id})"
+          disabled
+        >SET ZERO</button>
+      </div>
+
+      <div class="hint" id="hint-${s.id}">
+        รออ่านค่า Min/Max จาก Servo
+      </div>
+      <div class="message" id="message-${s.id}"></div>
+    </section>
+  `).join("");
+}
+
+// ==========================================
+// UPDATE SERVO CARD
+// ==========================================
+
+function updateCard(s){
+  const online = connected && s.online && isInt(s.actual);
+  const ready = isReady(s);
+
+  setText(`actual-${s.id}`, online ? s.actual : "—");
+  setText(`min-${s.id}`, validLimits(s) ? s.min : "—");
+  setText(`max-${s.id}`, validLimits(s) ? s.max : "—");
+  setText(`zero-${s.id}`, isInt(s.zero) ? s.zero : "—");
+
+  setText(
+    `voltage-${s.id}`,
+    online && typeof s.voltage === "number"
+      ? `${s.voltage.toFixed(1)} V`
+      : "—"
+  );
+
+  setText(
+    `temp-${s.id}`,
+    online && isInt(s.temperature)
+      ? `${s.temperature} °C`
+      : "—"
+  );
+
+  setText(
+    `relative-${s.id}`,
+    online ? fmtRelative(s.relative) : "—"
+  );
+
+  byId(`dot-${s.id}`).style.background =
+    online ? "#52cb86" : "#dc6868";
+
+  const input = byId(`target-${s.id}`);
+  const move = byId(`move-${s.id}`);
+  const zero = byId(`zero-btn-${s.id}`);
+
+  const locked =
+    directMoveBusy || serverMoveBusy || s.saving;
+
+  input.disabled = !ready || locked;
+  move.disabled = !ready || locked;
+  zero.disabled = !ready || locked;
+
+  move.textContent =
+    directMoveBusy && directMoveServoId === s.id
+      ? "MOVING..."
+      : "MOVE SERVO";
+
+  zero.textContent = s.saving ? "SAVING..." : "SET ZERO";
+
+  if(validLimits(s)){
+    const [low,high] = safeRange(s);
+    input.min = low;
+    input.max = high;
+
+    // Initialize target only once.
+    if(ready && !s.initialized){
+      input.value = Math.min(high, Math.max(low,s.actual));
+      s.initialized = true;
+    }
+  }
+
+  const hint = byId(`hint-${s.id}`);
+  hint.style.color = ready ? "#9aacbf" : "#ffaaaa";
+
+  hint.textContent = ready
+    ? `Safe Target: ${s.min+SAFE_MARGIN}–${s.max-SAFE_MARGIN} ticks | DIRECT MOVE ≤ ${MAX_DIRECT_MOVE} ticks/command | SET ZERO = Actual`
+    : online
+      ? "รอข้อมูล Min/Max หรือ Actual อยู่นอกขอบเขต"
+      : "Servo OFFLINE";
+}
+
+// ==========================================
+// CONNECTION STATUS
+// ==========================================
+
+function updateConnection(){
+  const e = byId("connection-status");
+
+  e.textContent = connected
+    ? "CONNECTED - ESP32 / 4 SERVOS"
+    : "DISCONNECTED";
+
+  e.style.background = connected ? "#153629" : "#432522";
+  e.style.color = connected ? "#79e6a5" : "#ffaaaa";
+
+  byId("system-notice").textContent = directMoveBusy
+    ? `DIRECT MOVE Servo ${directMoveServoId}: ส่งเป้าหมายคำสั่งเดียวและกำลังตรวจ Actual | ไม่มี Emergency Stop ผ่านเว็บ`
+    : connected
+      ? "DIRECT MOVE V2.2: พิมพ์ Target แล้วกด MOVE ครั้งเดียว | SET ZERO บันทึกตำแหน่งจริง | ต้องตรวจการชนและมีสวิตช์ตัดไฟ Servo"
+      : "รอข้อมูล ESP32 | ตรวจสอบ Flask และ COM3";
+}
+
+// ==========================================
+// SERVER STATUS
+// ==========================================
+
+function applyStatus(data){
+  connected = data.connected === true;
+  infoReady = data.info_ready === true;
+  serverMoveBusy = data.move_busy === true;
+
+  for(const row of data.servos || []){
+    const s = getServo(row.id);
+    if(!s) continue;
+
+    s.online = row.online === true;
+
+    for(const field of [
+      "actual","min","max","zero",
+      "relative","temperature"
+    ]){
+      s[field] = isInt(row[field]) ? row[field] : null;
+    }
+
+    s.voltage =
+      typeof row.voltage === "number" ? row.voltage : null;
+  }
+
+  updateConnection();
+  servos.forEach(updateCard);
+}
+
+async function fetchStatus(){
+  const response = await fetch(
+    "/api/status",
+    {cache:"no-store"}
+  );
+
+  if(!response.ok){
+    throw new Error(`Status HTTP ${response.status}`);
+  }
+
+  const data = await response.json();
+  applyStatus(data);
+  return data;
+}
+
+async function refreshLiveServos(){
+  if(refreshing) return;
+
+  refreshing = true;
+
+  try{
+    await fetchStatus();
+  }catch(error){
+    console.error("[STATUS ERROR]",error);
+
+    connected = false;
+    infoReady = false;
+    serverMoveBusy = false;
+
+    for(const s of servos){
+      s.online = false;
+    }
+
+    updateConnection();
+    servos.forEach(updateCard);
+  }finally{
+    refreshing = false;
+  }
+}
+
+// ==========================================
+// VERIFY FRESH POSITION
+// ==========================================
+
+function readValidSnapshot(data,id){
+  const s = (data.servos || []).find(
+    item => item.id === id
+  );
+
+  if(
+    !data.connected ||
+    !data.info_ready ||
+    !s ||
+    !s.online ||
+    !isInt(s.actual) ||
+    !isInt(s.min) ||
+    !isInt(s.max) ||
+    s.min >= s.max ||
+    s.actual < s.min ||
+    s.actual > s.max ||
+    typeof data.last_update !== "string"
+  ){
+    throw new Error(
+      "ข้อมูล Actual หรือการเชื่อมต่อไม่พร้อม"
+    );
+  }
+
+  const timestamp = Date.parse(data.last_update);
+
+  if(
+    !Number.isFinite(timestamp) ||
+    Math.abs(Date.now()-timestamp) > 10000
+  ){
+    throw new Error(
+      "ข้อมูล Actual เก่าเกิน 10 วินาที"
+    );
+  }
+
+  return {
+    actual:s.actual,
+    min:s.min,
+    max:s.max,
+    stamp:data.last_update
+  };
+}
+
+async function snapshot(id){
+  return readValidSnapshot(
+    await fetchStatus(),
+    id
+  );
+}
+
+// ==========================================
+// WAIT FOR TARGET FEEDBACK
+// ==========================================
+
+async function waitForTarget(id,target,previousStamp){
+  const deadline = Date.now()+FEEDBACK_TIMEOUT_MS;
+
+  let stable = 0;
+  let lastStamp = previousStamp;
+
+  while(Date.now() < deadline){
+    await sleep(800);
+
+    const current = await snapshot(id);
+
+    // Require two new READPOS samples near target.
+    if(current.stamp === lastStamp){
+      continue;
+    }
+
+    lastStamp = current.stamp;
+
+    if(
+      Math.abs(current.actual-target) <=
+      REACHED_TOLERANCE
+    ){
+      stable++;
+
+      if(stable >= 2){
+        return current;
+      }
+    }else{
+      stable = 0;
+    }
+  }
+
+  throw new Error(
+    "ยังตรวจไม่พบ Actual ที่นิ่งใกล้ Target; อย่าสั่งซ้ำจนกว่าจะตรวจ Servo"
+  );
+}
+
+// ==========================================
+// DIRECT MOVE: ONE COMMAND ONLY
+// ==========================================
+
+async function moveServo(id){
+  const s = getServo(id);
+
+  if(
+    !s ||
+    !isReady(s) ||
+    directMoveBusy ||
+    serverMoveBusy ||
+    s.saving
+  ){
+    alert("Servo ไม่พร้อมสำหรับ MOVE");
+    return;
+  }
+
+  const raw = byId(`target-${id}`).value.trim();
+  const target = Number(raw);
+
+  if(raw === "" || !isInt(target)){
+    alert("กรอก Target เป็นจำนวนเต็ม");
+    return;
+  }
+
+  const [low,high] = safeRange(s);
+
+  if(target < low || target > high){
+    alert(
+      `Target ต้องอยู่ในช่วง ${low}–${high} ticks`
+    );
+    return;
+  }
+
+  const distance = Math.abs(target-s.actual);
+
+  if(distance > MAX_DIRECT_MOVE){
+    alert(
+      `ระยะสูงสุด ${MAX_DIRECT_MOVE} ticks ต่อคำสั่ง\nActual ${s.actual} → Target ${target}`
+    );
+    return;
+  }
+
+  if(distance <= REACHED_TOLERANCE){
+    showMessage(
+      id,
+      "Servo อยู่ใกล้ Target แล้ว",
+      "ok"
+    );
+    return;
+  }
+
+  const confirmed = confirm(
+    `DIRECT MOVE Servo ${id}\n` +
+    `Actual: ${s.actual}\n` +
+    `Target: ${target}\n` +
+    `Distance: ${distance} ticks\n\n` +
+    "สั่งหมุนจริงต่อเนื่องด้วยคำสั่งเดียว\n" +
+    "ตรวจสอบว่าไม่มีการชนหรือสายติดขัด\n" +
+    "ยืนยัน MOVE?"
+  );
+
+  if(!confirmed) return;
+
+  directMoveBusy = true;
+  directMoveServoId = id;
+
+  updateConnection();
+  servos.forEach(updateCard);
+
+  try{
+    // Re-read Actual before sending.
+    const before = await snapshot(id);
+
+    const freshDistance = Math.abs(
+      target-before.actual
+    );
+
+    if(
+      target < before.min+SAFE_MARGIN ||
+      target > before.max-SAFE_MARGIN ||
+      freshDistance > MAX_DIRECT_MOVE
+    ){
+      throw new Error(
+        "ตำแหน่งล่าสุดอยู่นอกช่วงที่อนุญาต"
+      );
+    }
+
+    if(freshDistance <= REACHED_TOLERANCE){
+      showMessage(
+        id,
+        "Servo อยู่ใกล้ Target แล้ว",
+        "ok"
+      );
+      return;
+    }
+
+    showMessage(
+      id,
+      `กำลังส่ง MOVE: ${before.actual} → ${target} ticks`,
+      "info"
+    );
+
+    // Send exactly ONE MOVE command to Flask.
+    const response = await fetch(
+      `/api/servo/${id}/move`,
+      {
+        method:"POST",
+        headers:{
+          "Content-Type":"application/json"
+        },
+        body:JSON.stringify({
+          target:target,
+          confirm:true
+        })
+      }
+    );
+
+    const result = await response.json();
+
+    if(!response.ok || result.ok !== true){
+      throw new Error(
+        result.error ||
+        `MOVE HTTP ${response.status}`
+      );
+    }
+
+    showMessage(
+      id,
+      `ESP32 รับ Target ${target} แล้ว | กำลังตรวจ Actual`,
+      "info"
+    );
+
+    // Read feedback only. Send no further MOVE.
+    const after = await waitForTarget(
+      id,
+      target,
+      before.stamp
+    );
+
+    showMessage(
+      id,
+      `DIRECT MOVE สำเร็จ | Actual ${after.actual} | Target ${target}`,
+      "ok"
+    );
+
+  }catch(error){
+    console.error(
+      "[DIRECT MOVE]",
+      error
+    );
+
+    showMessage(
+      id,
+      `MOVE ไม่ได้รับการยืนยันว่าไปถึง: ${error.message} | ตรวจ Actual ก่อนกดอีกครั้ง`,
+      "error"
+    );
+
+  }finally{
+    directMoveBusy = false;
+    directMoveServoId = null;
+
+    await refreshLiveServos();
+
+    updateConnection();
+    servos.forEach(updateCard);
+  }
+}
+
+// ==========================================
+// SET ZERO: CURRENT ACTUAL POSITION
+// ==========================================
+
+async function setZero(id){
+  const s = getServo(id);
+
+  if(
+    !s ||
+    !isReady(s) ||
+    s.saving ||
+    directMoveBusy ||
+    serverMoveBusy
+  ){
+    alert("ยังไม่พร้อม SET ZERO");
+    return;
+  }
+
+  const confirmed = confirm(
+    `SET ZERO Servo ${id}\n` +
+    `Actual: ${s.actual} ticks\n\n` +
+    "บันทึกตำแหน่งนี้เป็น Zero?\n" +
+    "มอเตอร์จะไม่หมุน"
+  );
+
+  if(!confirmed) return;
+
+  s.saving = true;
+  updateCard(s);
+
+  try{
+    const response = await fetch(
+      `/api/servo/${id}/zero`,
+      {
+        method:"POST",
+        headers:{
+          "Content-Type":"application/json"
+        },
+        body:JSON.stringify({
+          confirm:true
+        })
+      }
+    );
+
+    const result = await response.json();
+
+    if(!response.ok || result.ok !== true){
+      throw new Error(
+        result.error || "SET ZERO failed"
+      );
+    }
+
+    s.zero = result.zero;
+    s.relative = 0;
+
+    showMessage(
+      id,
+      `SET ZERO สำเร็จ: ${result.zero} ticks | บันทึกในคอมพิวเตอร์แล้ว`,
+      "ok"
+    );
+
+    await refreshLiveServos();
+
+  }catch(error){
+    showMessage(
+      id,
+      `SET ZERO ไม่สำเร็จ: ${error.message}`,
+      "error"
+    );
+
+  }finally{
+    s.saving = false;
+    updateCard(s);
+  }
+}
+
+// Closing the page is not an emergency stop.
+window.addEventListener(
+  "beforeunload",
+  event => {
+    if(directMoveBusy){
+      event.preventDefault();
+      event.returnValue = "";
+    }
+  }
+);
+
+// ==========================================
+// START
+// ==========================================
+
+createCards();
+refreshLiveServos();
+
+setInterval(
+  refreshLiveServos,
+  POLL_MS
+);
+</script>
+</body>
+</html>
