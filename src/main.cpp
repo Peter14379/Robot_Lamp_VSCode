@@ -1,33 +1,22 @@
 
 /*
-  ROBOT LAMP V1.7
+  ROBOT LAMP V1.8
   ESP32-WROOM-32 / NodeMCU-32S
 
-  RGB: WS2812B 12 LEDs, GPIO18
-  SERVO: FEETECH SCS15, ID 1-4
-  UART: GPIO16 RX2, GPIO17 TX2
+  RGB: WS2812B, GPIO18
+  SERVO: FEETECH SCS15, IDs 1-4
   Waveshare Bus Servo Adapter (A)
-  Servo baud: 1000000
-  USB baud: 115200
+  UART2: RX16 / TX17, 1000000 baud
+  USB Serial: 115200 baud
 
-  COMMANDS:
-    SCAN
-    READPOS
-    READINFO
-    MOVE 1 400
-    TORQUEOFF 1
-    IDLE / HAPPY / ANGRY / SURPRISED
-    SAD / SLEEPY / STOP / STATUS / HELP
-
-  Emotion movements remain SIMULATION ONLY.
-  Only explicit MOVE commands operate real servos.
+  No automatic servo movement on startup.
   No EEPROM writes.
 */
 
 #include <Arduino.h>
 #include <Adafruit_NeoPixel.h>
-#include <string.h>
 #include <stdio.h>
+#include <string.h>
 
 // ==========================================
 // 1. CONFIGURATION
@@ -35,662 +24,406 @@
 
 constexpr uint8_t RGB_PIN = 18;
 constexpr uint8_t RGB_COUNT = 12;
-constexpr uint8_t ROBOT_LED_BRIGHTNESS = 15;
+constexpr uint8_t LED_BRIGHTNESS = 15;
 
 constexpr uint32_t USB_BAUD = 115200;
 constexpr uint32_t SERVO_BAUD = 1000000;
 
-constexpr int SERVO_RX_PIN = 16;
-constexpr int SERVO_TX_PIN = 17;
+constexpr int SERVO_RX = 16;
+constexpr int SERVO_TX = 17;
 
-constexpr uint8_t SERVO_COUNT = 4;
-constexpr uint32_t UART_TIMEOUT_MS = 180;
-constexpr size_t UART_BUFFER_SIZE = 128;
+constexpr uint8_t IDS[4] = {1, 2, 3, 4};
 
-const uint8_t SERVO_IDS[SERVO_COUNT] = {
-    1, 2, 3, 4
-};
-
-bool servoOnline[SERVO_COUNT] = {
-    false, false, false, false
-};
-
-Adafruit_NeoPixel rgbRing(
-    RGB_COUNT,
-    RGB_PIN,
-    NEO_GRB + NEO_KHZ800
-);
-
-// ==========================================
-// 2. MANUAL MOVE SAFETY
-// ==========================================
-
-constexpr uint16_t MOVE_SAFE_MARGIN = 20;
-constexpr uint16_t MOVE_MAX_STEP = 150;
+constexpr uint16_t SAFE_MARGIN = 20;
+constexpr uint16_t MAX_MANUAL_STEP = 150;
 constexpr uint16_t MOVE_SPEED = 80;
 
-constexpr float MOVE_MIN_VOLTAGE = 6.5f;
-constexpr float MOVE_MAX_VOLTAGE = 8.4f;
-constexpr uint16_t MOVE_MAX_TEMP = 55;
+constexpr int EMOTION_DELTA_LIMIT = 32;
 
-// No automatic motion on startup.
-// No automatic emotion-to-servo movement.
+constexpr float MIN_VOLT = 6.5f;
+constexpr float MAX_VOLT = 8.4f;
+constexpr uint16_t MAX_TEMP_C = 55;
 
-String currentEmotion = "IDLE";
+Adafruit_NeoPixel ring(
+    RGB_COUNT, RGB_PIN, NEO_GRB + NEO_KHZ800
+);
+
+bool online[4] = {false, false, false, false};
+uint16_t homeTicks[4] = {0, 0, 0, 0};
+
+uint8_t emotionMask = 0;
+String emotion = "IDLE";
 String rxLine;
 
 // ==========================================
-// 3. SIMULATION DATA
+// 2. EMOTION KEYFRAMES
 // ==========================================
 
-const int16_t HOME_TICKS[SERVO_COUNT] = {
-    2048, 2048, 2048, 2048
-};
-
-const int16_t LOW_TICKS[SERVO_COUNT] = {
-    2000, 2000, 2000, 2000
-};
-
-const int16_t HIGH_TICKS[SERVO_COUNT] = {
-    2096, 2096, 2096, 2096
-};
-
-struct Keyframe {
-    int16_t delta[SERVO_COUNT];
+struct Frame {
+    int16_t delta[4];
     uint16_t holdMs;
-    uint16_t speed;
 };
 
-struct Motion {
-    const Keyframe *frames;
-    uint8_t count;
+const Frame idleFrames[] = {
+    {{0, 0, 0, 0}, 600}
 };
 
-const Keyframe MOTION_IDLE[] = {
-    {{0, 0, 0, 0}, 600, 100}
+const Frame happyFrames[] = {
+    {{-12, 8, 8, 0}, 280},
+    {{12, -8, -8, 0}, 280},
+    {{-12, 8, 8, 0}, 280},
+    {{0, 0, 0, 0}, 450}
 };
 
-const Keyframe MOTION_SURPRISED[] = {
-    {{0, 0, 0, 0}, 200, 150},
-    {{-28, 28, -20, 20}, 400, 180},
-    {{0, 0, 0, 0}, 600, 120}
+const Frame angryFrames[] = {
+    {{-20, 10, 0, 0}, 220},
+    {{20, -10, 0, 0}, 220},
+    {{-20, 10, 0, 0}, 220},
+    {{0, 0, 0, 0}, 500}
 };
 
-const Keyframe MOTION_ANGRY[] = {
-    {{-20, 10, 0, 0}, 220, 160},
-    {{20, -10, 0, 0}, 220, 160},
-    {{-20, 10, 0, 0}, 220, 160},
-    {{0, 0, 0, 0}, 500, 100}
+const Frame surprisedFrames[] = {
+    {{0, 0, 0, 0}, 200},
+    {{-28, 28, -20, 20}, 400},
+    {{0, 0, 0, 0}, 600}
 };
 
-const Keyframe MOTION_HAPPY[] = {
-    {{-12, 8, 8, 0}, 280, 150},
-    {{12, -8, -8, 0}, 280, 150},
-    {{-12, 8, 8, 0}, 280, 150},
-    {{0, 0, 0, 0}, 450, 120}
+const Frame sadFrames[] = {
+    {{0, -25, 15, 0}, 1200}
 };
 
-const Keyframe MOTION_SAD[] = {
-    {{0, -25, 15, 0}, 1200, 65}
+const Frame sleepyFrames[] = {
+    {{0, -18, 18, 0}, 1600},
+    {{0, -25, 25, 0}, 1600}
 };
 
-const Keyframe MOTION_SLEEPY[] = {
-    {{0, -18, 18, 0}, 1600, 45},
-    {{0, -25, 25, 0}, 1600, 45}
-};
+const Frame *frames = nullptr;
 
-#define TO_MOTION(arr) \
-    {arr, static_cast<uint8_t>(sizeof(arr) / sizeof(arr[0]))}
-
-const Motion IDLE_MOTION = TO_MOTION(MOTION_IDLE);
-const Motion SURPRISED_MOTION = TO_MOTION(MOTION_SURPRISED);
-const Motion ANGRY_MOTION = TO_MOTION(MOTION_ANGRY);
-const Motion HAPPY_MOTION = TO_MOTION(MOTION_HAPPY);
-const Motion SAD_MOTION = TO_MOTION(MOTION_SAD);
-const Motion SLEEPY_MOTION = TO_MOTION(MOTION_SLEEPY);
-
-const Motion *activeMotion = nullptr;
-
-uint8_t nextFrameIndex = 0;
+uint8_t frameCount = 0;
+uint8_t frameIndex = 0;
 uint32_t nextFrameAt = 0;
 bool motionActive = false;
 
 // ==========================================
-// 4. UART HELPERS
+// 3. SCS15 COMMUNICATION
 // ==========================================
 
-static void printHex(
-    const uint8_t *data,
-    size_t count
-) {
-    for (size_t i = 0; i < count; ++i) {
-        Serial.printf(
-            "%02X%s",
-            data[i],
-            i + 1 == count ? "" : " "
-        );
-    }
-    Serial.println();
+bool validID(uint8_t id) {
+    return id >= 1 && id <= 4;
 }
 
-static bool checksumOK(
-    const uint8_t *packet,
-    size_t total
-) {
+bool checksumOK(const uint8_t *p, size_t n) {
     uint16_t sum = 0;
 
-    for (size_t i = 2; i < total; ++i) {
-        sum += packet[i];
+    for (size_t i = 2; i < n; ++i) {
+        sum += p[i];
     }
 
-    return (sum & 0xFF) == 0xFF;
+    return (sum & 255) == 255;
 }
 
-static bool validServoID(uint8_t sid) {
-    for (uint8_t id : SERVO_IDS) {
-        if (sid == id) {
-            return true;
-        }
-    }
-    return false;
-}
-
-// ==========================================
-// 5. UART SEND AND RECEIVE
-// ==========================================
-
-static size_t sendAndReceive(
-    uint8_t sid,
-    const uint8_t *tx,
-    size_t txLength,
-    uint8_t *rx,
-    size_t rxMax
+bool request(
+    uint8_t id,
+    uint8_t instruction,
+    const uint8_t *params,
+    uint8_t pLen,
+    uint8_t *out,
+    uint8_t &outLen,
+    uint8_t expectedData
 ) {
-    while (Serial2.available() > 0) {
+    if (!validID(id) || pLen > 16) {
+        return false;
+    }
+
+    uint8_t tx[24] = {
+        0xFF, 0xFF, id,
+        static_cast<uint8_t>(pLen + 2),
+        instruction
+    };
+
+    uint16_t sum = id + tx[3] + instruction;
+
+    for (uint8_t i = 0; i < pLen; ++i) {
+        tx[5 + i] = params[i];
+        sum += params[i];
+    }
+
+    tx[5 + pLen] = static_cast<uint8_t>(~sum);
+
+    const size_t txLen = pLen + 6;
+
+    while (Serial2.available()) {
         Serial2.read();
     }
 
-    Serial.printf("[UART TX ID %u] ", sid);
-    printHex(tx, txLength);
-
-    Serial2.write(tx, txLength);
+    Serial2.write(tx, txLen);
     Serial2.flush();
 
-    size_t count = 0;
-    bool overflow = false;
+    uint8_t rx[96];
+    size_t got = 0;
 
-    const uint32_t started = millis();
+    const uint32_t t0 = millis();
 
-    while (
-        static_cast<uint32_t>(
-            millis() - started
-        ) < UART_TIMEOUT_MS
-    ) {
-        while (Serial2.available() > 0) {
-            const int value = Serial2.read();
+    while (millis() - t0 < 180) {
+        while (
+            Serial2.available() &&
+            got < sizeof(rx)
+        ) {
+            rx[got++] =
+                static_cast<uint8_t>(Serial2.read());
+        }
 
-            if (value < 0) {
+        for (size_t i = 0; i + 6 <= got; ++i) {
+            if (
+                rx[i] != 0xFF ||
+                rx[i + 1] != 0xFF ||
+                rx[i + 2] != id
+            ) {
                 continue;
             }
 
-            if (count < rxMax) {
-                rx[count++] = static_cast<uint8_t>(value);
-            } else {
-                overflow = true;
+            const uint8_t len = rx[i + 3];
+
+            if (
+                len < 2 ||
+                len > 20 ||
+                i + len + 4 > got
+            ) {
+                continue;
             }
+
+            const size_t packetLen = len + 4;
+
+            if (!checksumOK(rx + i, packetLen)) {
+                continue;
+            }
+
+            // Ignore a command echo.
+            if (
+                packetLen == txLen &&
+                memcmp(rx + i, tx, txLen) == 0
+            ) {
+                continue;
+            }
+
+            if (
+                rx[i + 4] != 0 ||
+                len != expectedData + 2
+            ) {
+                continue;
+            }
+
+            outLen = expectedData;
+
+            for (
+                uint8_t j = 0;
+                j < expectedData;
+                ++j
+            ) {
+                out[j] = rx[i + 5 + j];
+            }
+
+            return true;
         }
 
         delay(1);
     }
 
-    Serial.printf("[UART RX ID %u] ", sid);
-
-    if (count == 0) {
-        Serial.println("NO DATA");
-    } else {
-        printHex(rx, count);
-    }
-
-    if (overflow) {
-        Serial.println(
-            "[UART WARNING] RX overflow"
-        );
-    }
-
-    return count;
-}
-
-// ==========================================
-// 6. PING
-// ==========================================
-
-static bool pingScsServo(uint8_t sid) {
-    const uint8_t tx[] = {
-        0xFF, 0xFF, sid, 0x02, 0x01,
-        static_cast<uint8_t>(
-            ~(sid + 0x02 + 0x01)
-        )
-    };
-
-    uint8_t rx[UART_BUFFER_SIZE];
-
-    const size_t count = sendAndReceive(
-        sid, tx, sizeof(tx), rx, sizeof(rx)
-    );
-
-    for (size_t i = 0; i + 6 <= count; ++i) {
-        if (
-            rx[i] == 0xFF &&
-            rx[i + 1] == 0xFF &&
-            rx[i + 2] == sid &&
-            rx[i + 3] == 0x02 &&
-            checksumOK(rx + i, 6) &&
-            rx[i + 4] == 0x00
-        ) {
-            return true;
-        }
-    }
-
     return false;
 }
 
-static void scanServos() {
-    Serial.println();
-    Serial.println(
-        "===== SCS15 UART DIAGNOSTIC ====="
-    );
+// ==========================================
+// 4. PING / READ / WRITE
+// ==========================================
 
-    uint8_t found = 0;
+bool ping(uint8_t id) {
+    uint8_t out[4];
+    uint8_t n = 0;
 
-    for (uint8_t i = 0; i < SERVO_COUNT; ++i) {
-        const uint8_t sid = SERVO_IDS[i];
-
-        bool ok = pingScsServo(sid);
-
-        if (!ok) {
-            delay(30);
-            ok = pingScsServo(sid);
-        }
-
-        servoOnline[i] = ok;
-
-        if (ok) {
-            ++found;
-            Serial.printf(
-                "[FOUND] Servo ID %u\n", sid
-            );
-        } else {
-            Serial.printf(
-                "[ERROR] Servo ID %u no reply\n", sid
-            );
-        }
-    }
-
-    Serial.printf(
-        "[SCAN] %u/%u servo(s) responding\n",
-        found, SERVO_COUNT
-    );
-
-    Serial.println(
-        "===== PING TEST COMPLETE (NO MOVEMENT) ====="
+    return request(
+        id, 0x01, nullptr, 0, out, n, 0
     );
 }
 
-// ==========================================
-// 7. READ REGISTERS
-// SCS15 SC SERIES: HIGH BYTE FIRST
-// ==========================================
-
-static bool readScsRegister(
-    uint8_t sid,
-    uint8_t address,
+bool readReg(
+    uint8_t id,
+    uint8_t reg,
     uint8_t width,
-    uint16_t &result
+    uint16_t &value
 ) {
-    if (
-        !validServoID(sid) ||
-        (width != 1 && width != 2)
-    ) {
+    if (width != 1 && width != 2) {
         return false;
     }
 
-    const uint8_t tx[] = {
-        0xFF, 0xFF, sid, 0x04, 0x02,
-        address, width,
-        static_cast<uint8_t>(
-            ~(sid + 0x04 + 0x02 + address + width)
-        )
-    };
+    uint8_t p[2] = {reg, width};
+    uint8_t out[4] = {0};
+    uint8_t n = 0;
 
-    uint8_t rx[UART_BUFFER_SIZE];
-
-    const size_t count = sendAndReceive(
-        sid, tx, sizeof(tx), rx, sizeof(rx)
-    );
-
-    const size_t packetSize = width + 6;
-
-    for (
-        size_t i = 0;
-        i + packetSize <= count;
-        ++i
-    ) {
-        if (
-            rx[i] != 0xFF ||
-            rx[i + 1] != 0xFF ||
-            rx[i + 2] != sid ||
-            rx[i + 3] != width + 2 ||
-            !checksumOK(rx + i, packetSize)
-        ) {
-            continue;
-        }
-
-        // Skip an exact command echo.
-        if (
-            packetSize == sizeof(tx) &&
-            memcmp(rx + i, tx, sizeof(tx)) == 0
-        ) {
-            continue;
-        }
-
-        if (rx[i + 4] != 0x00) {
-            Serial.printf(
-                "[READ ERROR] ID=%u ADDR=0x%02X STATUS=%u\n",
-                sid, address, rx[i + 4]
-            );
-            continue;
-        }
-
-        if (width == 1) {
-            result = rx[i + 5];
-        } else {
-            result =
-                (static_cast<uint16_t>(rx[i + 5]) << 8) |
-                static_cast<uint16_t>(rx[i + 6]);
-        }
-
-        return true;
-    }
-
-    Serial.printf(
-        "[READ ERROR] ID=%u ADDR=0x%02X NO REPLY\n",
-        sid, address
-    );
-
-    return false;
-}
-
-static bool readScsPosition(
-    uint8_t sid,
-    uint16_t &position
-) {
-    uint16_t value = 0;
-
-    if (!readScsRegister(sid, 0x38, 2, value)) {
+    if (!request(id, 0x02, p, 2, out, n, width)) {
         return false;
     }
 
-    if (value > 1023) {
-        return false;
-    }
+    // SC series: HIGH byte first.
+    value = (width == 1)
+        ? out[0]
+        : static_cast<uint16_t>(
+              (out[0] << 8) | out[1]
+          );
 
-    position = value;
     return true;
 }
 
-// ==========================================
-// 8. READPOS
-// ==========================================
-
-static void readAllPositions() {
-    Serial.println();
-    Serial.println(
-        "===== REAL SERVO POSITIONS (READ ONLY) ====="
-    );
-
-    for (uint8_t sid : SERVO_IDS) {
-        uint16_t position = 0;
-
-        if (readScsPosition(sid, position)) {
-            Serial.printf(
-                "[POSITION] Servo ID %u = %u ticks\n",
-                sid, position
-            );
-        } else {
-            Serial.printf(
-                "[ERROR] ID %u position read failed\n",
-                sid
-            );
-        }
-    }
-
-    Serial.println(
-        "===== READ COMPLETE (NO MOVEMENT) ====="
-    );
-}
-
-// ==========================================
-// 9. READINFO
-// ==========================================
-
-static void readAllServoInfo() {
-    Serial.println();
-    Serial.println(
-        "===== SERVO READINFO (READ ONLY) ====="
-    );
-
-    for (uint8_t sid : SERVO_IDS) {
-        uint16_t low = 0;
-        uint16_t high = 0;
-        uint16_t voltageRaw = 0;
-        uint16_t temp = 0;
-
-        Serial.println("--------------------------------");
-
-        bool ok =
-            readScsRegister(sid, 0x09, 2, low) &&
-            readScsRegister(sid, 0x0B, 2, high) &&
-            readScsRegister(sid, 0x3E, 1, voltageRaw) &&
-            readScsRegister(sid, 0x3F, 1, temp);
-
-        if (!ok) {
-            Serial.printf(
-                "[INFO ERROR] ID %u read failed\n",
-                sid
-            );
-            continue;
-        }
-
-        Serial.printf(
-            "[INFO] ID=%u MIN=%u MAX=%u VOLTAGE=%.1f TEMP=%u\n",
-            sid, low, high,
-            voltageRaw / 10.0f, temp
-        );
-
-        if (low >= high || high > 1023) {
-            Serial.printf(
-                "[WARNING] ID %u invalid limits\n",
-                sid
-            );
-        } else {
-            Serial.printf(
-                "[INFO OK] Servo ID %u registers read\n",
-                sid
-            );
-        }
-    }
-
-    Serial.println("--------------------------------");
-    Serial.println(
-        "===== READINFO COMPLETE (NO MOVEMENT) ====="
-    );
-}
-
-// ==========================================
-// 10. RAM WRITE
-// Only 0x28 and 0x2A are allowed.
-// No EEPROM addresses.
-// ==========================================
-
-static bool writeScsRAM(
-    uint8_t sid,
-    uint8_t address,
+// RAM-only writes; no EEPROM writes.
+bool writeRAM(
+    uint8_t id,
+    uint8_t reg,
     const uint8_t *data,
     uint8_t width
 ) {
-    if (!validServoID(sid)) {
+    if (!(
+        (reg == 0x28 && width == 1) ||
+        (reg == 0x2A && width == 6)
+    )) {
         return false;
     }
 
-    if (
-        !(
-            (address == 0x28 && width == 1) ||
-            (address == 0x2A && width == 6)
-        )
-    ) {
-        Serial.println(
-            "[WRITE ERROR] Address not allowed"
-        );
-        return false;
-    }
-
-    uint8_t tx[16] = {0};
-
-    tx[0] = 0xFF;
-    tx[1] = 0xFF;
-    tx[2] = sid;
-    tx[3] = width + 3;
-    tx[4] = 0x03;
-    tx[5] = address;
-
-    uint16_t sum =
-        sid + tx[3] + tx[4] + address;
+    uint8_t params[7] = {reg};
 
     for (uint8_t i = 0; i < width; ++i) {
-        tx[6 + i] = data[i];
-        sum += data[i];
+        params[i + 1] = data[i];
     }
 
-    tx[6 + width] =
-        static_cast<uint8_t>(~sum);
+    uint8_t out[4];
+    uint8_t n = 0;
 
-    uint8_t rx[UART_BUFFER_SIZE];
-
-    const size_t count = sendAndReceive(
-        sid,
-        tx,
-        width + 7,
-        rx,
-        sizeof(rx)
+    return request(
+        id, 0x03, params, width + 1, out, n, 0
     );
+}
 
-    // ACK:
-    // FF FF ID 02 00 CHECKSUM
+bool torqueSet(uint8_t id, bool enable) {
+    uint8_t v = enable ? 1 : 0;
 
-    for (size_t i = 0; i + 6 <= count; ++i) {
-        if (
-            rx[i] == 0xFF &&
-            rx[i + 1] == 0xFF &&
-            rx[i + 2] == sid &&
-            rx[i + 3] == 0x02 &&
-            checksumOK(rx + i, 6)
-        ) {
-            if (rx[i + 4] == 0x00) {
-                return true;
-            }
+    return writeRAM(id, 0x28, &v, 1);
+}
 
-            Serial.printf(
-                "[WRITE ERROR] ID=%u STATUS=%u\n",
-                sid, rx[i + 4]
-            );
+bool setGoal(uint8_t id, uint16_t ticks) {
+    uint8_t data[6] = {
+        static_cast<uint8_t>(ticks >> 8),
+        static_cast<uint8_t>(ticks),
+        0, 0,
+        static_cast<uint8_t>(MOVE_SPEED >> 8),
+        static_cast<uint8_t>(MOVE_SPEED)
+    };
+
+    return writeRAM(id, 0x2A, data, 6);
+}
+
+bool readPosition(
+    uint8_t id,
+    uint16_t &pos
+) {
+    return readReg(id, 0x38, 2, pos) &&
+           pos <= 1023;
+}
+
+// ==========================================
+// 5. SCAN / READPOS / READINFO
+// ==========================================
+
+void scanServos() {
+    uint8_t count = 0;
+
+    for (uint8_t id : IDS) {
+        bool ok = ping(id);
+
+        if (!ok) {
+            delay(30);
+            ok = ping(id);
+        }
+
+        online[id - 1] = ok;
+
+        Serial.printf(
+            "[%s] Servo ID %u\n",
+            ok ? "FOUND" : "ERROR", id
+        );
+
+        if (ok) {
+            ++count;
         }
     }
 
-    Serial.printf(
-        "[WRITE ERROR] ID=%u NO VALID ACK\n",
-        sid
-    );
-    return false;
+    Serial.printf("[SCAN] %u/4 detected\n", count);
 }
 
-static bool setScsTorque(
-    uint8_t sid,
-    bool enabled
-) {
-    const uint8_t value = enabled ? 1 : 0;
+void readPositions() {
+    for (uint8_t id : IDS) {
+        uint16_t p = 0;
 
-    return writeScsRAM(
-        sid, 0x28, &value, 1
-    );
+        if (readPosition(id, p)) {
+            Serial.printf(
+                "[POSITION] Servo ID %u = %u ticks\n",
+                id, p
+            );
+        } else {
+            Serial.printf(
+                "[ERROR] ID %u READPOS failed\n", id
+            );
+        }
+    }
 }
 
-static bool writeScsGoal(
-    uint8_t sid,
-    uint16_t target
-) {
-    // Position HIGH, LOW
-    // Time HIGH, LOW
-    // Speed HIGH, LOW
-    const uint8_t data[6] = {
-        static_cast<uint8_t>(target >> 8),
-        static_cast<uint8_t>(target & 0xFF),
-        0x00,
-        0x00,
-        static_cast<uint8_t>(MOVE_SPEED >> 8),
-        static_cast<uint8_t>(MOVE_SPEED & 0xFF)
-    };
+void readInfo() {
+    for (uint8_t id : IDS) {
+        uint16_t lo = 0;
+        uint16_t hi = 0;
+        uint16_t v = 0;
+        uint16_t t = 0;
 
-    return writeScsRAM(
-        sid, 0x2A, data, sizeof(data)
-    );
+        if (
+            readReg(id, 0x09, 2, lo) &&
+            readReg(id, 0x0B, 2, hi) &&
+            readReg(id, 0x3E, 1, v) &&
+            readReg(id, 0x3F, 1, t)
+        ) {
+            Serial.printf(
+                "[INFO] ID=%u MIN=%u MAX=%u "
+                "VOLTAGE=%.1f TEMP=%u\n",
+                id, lo, hi, v / 10.0f, t
+            );
+        } else {
+            Serial.printf(
+                "[INFO ERROR] Servo ID %u\n", id
+            );
+        }
+    }
 }
 
 // ==========================================
-// 11. MANUAL MOVE
-// Example: MOVE 1 400
+// 6. SAFETY CHECKS
 // ==========================================
 
-static bool moveOneServo(
-    uint8_t sid,
-    uint16_t target
+bool servoChecks(
+    uint8_t id,
+    uint16_t &actual,
+    uint16_t &low,
+    uint16_t &high,
+    uint16_t &torque
 ) {
-    if (!validServoID(sid)) {
-        Serial.println(
-            "[MOVE ERROR] Invalid Servo ID"
-        );
-        return false;
-    }
-
-    uint16_t actual = 0;
-    uint16_t low = 0;
-    uint16_t high = 0;
-    uint16_t voltageRaw = 0;
-    uint16_t temperature = 0;
-    uint16_t torque = 0;
-
-    if (!readScsPosition(sid, actual)) {
-        Serial.println(
-            "[MOVE ERROR] Cannot read Actual"
-        );
-        return false;
-    }
+    uint16_t volt = 0;
+    uint16_t temp = 0;
 
     if (
-        !readScsRegister(sid, 0x09, 2, low) ||
-        !readScsRegister(sid, 0x0B, 2, high)
+        !readPosition(id, actual) ||
+        !readReg(id, 0x09, 2, low) ||
+        !readReg(id, 0x0B, 2, high) ||
+        !readReg(id, 0x3E, 1, volt) ||
+        !readReg(id, 0x3F, 1, temp) ||
+        !readReg(id, 0x28, 1, torque)
     ) {
-        Serial.println(
-            "[MOVE ERROR] Cannot read Min/Max"
-        );
-        return false;
-    }
-
-    if (
-        !readScsRegister(sid, 0x3E, 1, voltageRaw) ||
-        !readScsRegister(sid, 0x3F, 1, temperature)
-    ) {
-        Serial.println(
-            "[MOVE ERROR] Cannot read Voltage/Temp"
+        Serial.printf(
+            "[SAFE] ID %u: read failed\n", id
         );
         return false;
     }
@@ -700,321 +433,289 @@ static bool moveOneServo(
         high > 1023 ||
         actual < low ||
         actual > high ||
-        high - low <= 2 * MOVE_SAFE_MARGIN
-    ) {
-        Serial.println(
-            "[MOVE ERROR] Invalid hardware limits"
-        );
-        return false;
-    }
-
-    const uint16_t safeLow =
-        low + MOVE_SAFE_MARGIN;
-
-    const uint16_t safeHigh =
-        high - MOVE_SAFE_MARGIN;
-
-    if (
-        target < safeLow ||
-        target > safeHigh
+        high - low <= 2 * SAFE_MARGIN ||
+        torque > 1 ||
+        volt / 10.0f < MIN_VOLT ||
+        volt / 10.0f > MAX_VOLT ||
+        temp >= MAX_TEMP_C
     ) {
         Serial.printf(
-            "[MOVE ERROR] Target %u outside %u..%u\n",
-            target, safeLow, safeHigh
+            "[SAFE] ID=%u POS=%u LIMIT=%u..%u "
+            "VOLT=%.1f TEMP=%u TORQUE=%u REJECT\n",
+            id, actual, low, high,
+            volt / 10.0f, temp, torque
         );
+
         return false;
     }
 
-    const int distance = abs(
-        static_cast<int>(target) -
-        static_cast<int>(actual)
-    );
+    return true;
+}
 
-    if (distance > MOVE_MAX_STEP) {
-        Serial.printf(
-            "[MOVE ERROR] Distance %d exceeds %u ticks\n",
-            distance, MOVE_MAX_STEP
-        );
-        return false;
-    }
+// ==========================================
+// 7. REAL SERVO MOVE
+// ==========================================
 
-    const float voltage = voltageRaw / 10.0f;
+bool moveServo(uint8_t id, uint16_t target) {
+    uint16_t actual = 0;
+    uint16_t lo = 0;
+    uint16_t hi = 0;
+    uint16_t torque = 0;
 
     if (
-        voltage < MOVE_MIN_VOLTAGE ||
-        voltage > MOVE_MAX_VOLTAGE
+        !validID(id) ||
+        !servoChecks(id, actual, lo, hi, torque)
     ) {
-        Serial.println(
-            "[MOVE ERROR] Voltage outside range"
-        );
         return false;
     }
 
-    if (temperature >= MOVE_MAX_TEMP) {
-        Serial.println(
-            "[MOVE ERROR] Temperature too high"
+    if (
+        target < lo + SAFE_MARGIN ||
+        target > hi - SAFE_MARGIN ||
+        abs(
+            static_cast<int>(target) -
+            static_cast<int>(actual)
+        ) > MAX_MANUAL_STEP
+    ) {
+        Serial.printf(
+            "[MOVE REJECT] ID=%u FROM=%u "
+            "TARGET=%u ALLOWED=%u..%u\n",
+            id, actual, target,
+            lo + SAFE_MARGIN,
+            hi - SAFE_MARGIN
         );
+
         return false;
     }
 
-    if (!readScsRegister(sid, 0x28, 1, torque)) {
-        Serial.println(
-            "[MOVE ERROR] Cannot read Torque"
-        );
-        return false;
-    }
-
-    if (torque > 1) {
-        Serial.println(
-            "[MOVE ERROR] Unexpected torque mode"
-        );
-        return false;
-    }
-
+    // First hold the current position before torque ON.
     if (torque == 0) {
-        // Set holding goal before enabling torque.
-        if (!writeScsGoal(sid, actual)) {
+        if (!setGoal(id, actual)) {
             Serial.println(
-                "[MOVE ERROR] Cannot write holding goal"
+                "[MOVE ERROR] Hold goal write"
             );
             return false;
         }
 
-        // Verify encoding and written position.
-        uint16_t verifyGoal = 0;
+        uint16_t check = 0;
 
         if (
-            !readScsRegister(
-                sid, 0x2A, 2, verifyGoal
-            ) ||
-            verifyGoal != actual
+            !readReg(id, 0x2A, 2, check) ||
+            check != actual ||
+            !torqueSet(id, true)
         ) {
             Serial.println(
-                "[MOVE ERROR] Holding goal verification failed"
-            );
-            return false;
-        }
-
-        if (!setScsTorque(sid, true)) {
-            Serial.println(
-                "[MOVE ERROR] Cannot enable Torque"
+                "[MOVE ERROR] Goal/Torque check"
             );
             return false;
         }
 
         delay(200);
 
-        uint16_t afterEnable = 0;
+        uint16_t now = 0;
 
         if (
-            !readScsPosition(sid, afterEnable) ||
+            !readPosition(id, now) ||
             abs(
-                static_cast<int>(afterEnable) -
+                static_cast<int>(now) -
                 static_cast<int>(actual)
             ) > 5
         ) {
+            torqueSet(id, false);
+
             Serial.println(
-                "[MOVE ERROR] Unexpected movement on Torque ON"
+                "[MOVE ERROR] Unexpected movement"
             );
 
-            setScsTorque(sid, false);
             return false;
         }
     }
 
-    // Send real position command.
-    if (!writeScsGoal(sid, target)) {
+    if (!setGoal(id, target)) {
         Serial.println(
-            "[MOVE ERROR] Goal write not confirmed"
+            "[MOVE ERROR] Goal write failed"
         );
         return false;
     }
 
-    // Verify the goal register.
-    uint16_t verifyTarget = 0;
+    uint16_t written = 0;
 
     if (
-        !readScsRegister(
-            sid, 0x2A, 2, verifyTarget
-        ) ||
-        verifyTarget != target
+        !readReg(id, 0x2A, 2, written) ||
+        written != target
     ) {
         Serial.println(
-            "[MOVE ERROR] Goal register verification failed"
+            "[MOVE ERROR] Goal verify failed"
         );
         return false;
     }
 
     Serial.printf(
-        "[MOVE OK] ID=%u FROM=%u TARGET=%u SPEED=%u\n",
-        sid, actual, target, MOVE_SPEED
+        "[MOVE OK] ID=%u FROM=%u TARGET=%u\n",
+        id, actual, target
     );
 
-    // This confirms command acceptance,
-    // NOT that the servo has reached the target.
+    // Accepted command, not proof of reaching target.
     return true;
 }
 
 // ==========================================
-// 12. TORQUE OFF
+// 8. ARM / DISARM EMOTION
 // ==========================================
 
-static void torqueOffOneServo(uint8_t sid) {
-    if (!validServoID(sid)) {
-        Serial.println(
-            "[TORQUE ERROR] Invalid Servo ID"
+void disarm() {
+    emotionMask = 0;
+    motionActive = false;
+    frames = nullptr;
+
+    Serial.println(
+        "[EMOTION] DISARMED"
+    );
+
+    // Torque remains unchanged.
+}
+
+bool armEmotion(uint8_t mask) {
+    disarm();
+
+    uint16_t bases[4] = {0, 0, 0, 0};
+
+    for (uint8_t i = 0; i < 4; ++i) {
+        if (!(mask & (1u << i))) {
+            continue;
+        }
+
+        uint16_t pos = 0;
+        uint16_t lo = 0;
+        uint16_t hi = 0;
+        uint16_t torque = 0;
+
+        if (
+            !ping(IDS[i]) ||
+            !servoChecks(
+                IDS[i], pos, lo, hi, torque
+            ) ||
+            static_cast<int>(pos) <
+                static_cast<int>(lo) +
+                SAFE_MARGIN + EMOTION_DELTA_LIMIT ||
+            static_cast<int>(pos) >
+                static_cast<int>(hi) -
+                SAFE_MARGIN - EMOTION_DELTA_LIMIT
+        ) {
+            Serial.printf(
+                "[ARM REJECTED] ID=%u\n", IDS[i]
+            );
+            return false;
+        }
+
+        bases[i] = pos;
+
+        Serial.printf(
+            "[ARM CHECK] ID=%u HOME=%u\n",
+            IDS[i], pos
         );
-        return;
     }
 
-    if (setScsTorque(sid, false)) {
-        Serial.printf(
-            "[TORQUE OFF] Servo ID %u\n",
-            sid
-        );
-    } else {
-        Serial.println(
-            "[TORQUE ERROR] No confirmed ACK"
-        );
+    for (uint8_t i = 0; i < 4; ++i) {
+        homeTicks[i] = bases[i];
     }
+
+    emotionMask = mask;
+
+    Serial.printf(
+        "[EMOTION] ARMED mask=0x%02X\n",
+        emotionMask
+    );
+
+    return true;
 }
 
 // ==========================================
-// 13. RGB EMOTION COLORS
+// 9. RGB EMOTION COLORS
 // ==========================================
 
-static void showLightPreset(
-    const String &emotion
-) {
+void setColor(const String &e) {
     uint8_t r = 0;
     uint8_t g = 150;
     uint8_t b = 255;
 
-    const char *colorName = "CYAN";
-
-    if (emotion == "HAPPY") {
+    if (e == "HAPPY") {
         r = 255; g = 200; b = 0;
-        colorName = "YELLOW";
-
-    } else if (emotion == "ANGRY") {
+    } else if (e == "ANGRY") {
         r = 255; g = 0; b = 0;
-        colorName = "RED";
-
-    } else if (emotion == "SURPRISED") {
-        r = 255; g = 255; b = 255;
-        colorName = "WHITE";
-
-    } else if (emotion == "SAD") {
+    } else if (e == "SAD") {
         r = 0; g = 0; b = 255;
-        colorName = "BLUE";
-
-    } else if (emotion == "SLEEPY") {
+    } else if (e == "SURPRISED") {
+        r = 255; g = 255; b = 255;
+    } else if (e == "SLEEPY") {
         r = 150; g = 0; b = 255;
-        colorName = "PURPLE";
-
-    } else if (emotion == "STOP") {
+    } else if (e == "STOP") {
         r = 0; g = 0; b = 0;
-        colorName = "OFF";
     }
 
-    rgbRing.fill(
-        rgbRing.Color(r, g, b)
-    );
-
-    rgbRing.show();
-
-    Serial.printf(
-        "[RGB] %s R=%u G=%u B=%u | SOLID\n",
-        colorName, r, g, b
-    );
+    ring.fill(ring.Color(r, g, b));
+    ring.show();
 }
 
 // ==========================================
-// 14. EMOTION SIMULATION
+// 10. SELECT EMOTION
 // ==========================================
 
-static const Motion *motionForEmotion(
-    const String &emotion
-) {
-    if (emotion == "IDLE") {
-        return &IDLE_MOTION;
-    }
-    if (emotion == "SURPRISED") {
-        return &SURPRISED_MOTION;
-    }
-    if (emotion == "ANGRY") {
-        return &ANGRY_MOTION;
-    }
-    if (emotion == "HAPPY") {
-        return &HAPPY_MOTION;
-    }
-    if (emotion == "SAD") {
-        return &SAD_MOTION;
-    }
-    if (emotion == "SLEEPY") {
-        return &SLEEPY_MOTION;
+void setEmotion(String e) {
+    if (e == "SHOCK") {
+        e = "SURPRISED";
     }
 
-    return nullptr;
-}
-
-static void setEmotion(const String &emotion) {
-    const Motion *motion = motionForEmotion(emotion);
-
-    if (motion == nullptr) {
+    if (e == "IDLE") {
+        frames = idleFrames;
+        frameCount = sizeof(idleFrames) / sizeof(Frame);
+    } else if (e == "HAPPY") {
+        frames = happyFrames;
+        frameCount = sizeof(happyFrames) / sizeof(Frame);
+    } else if (e == "ANGRY") {
+        frames = angryFrames;
+        frameCount = sizeof(angryFrames) / sizeof(Frame);
+    } else if (e == "SURPRISED") {
+        frames = surprisedFrames;
+        frameCount =
+            sizeof(surprisedFrames) / sizeof(Frame);
+    } else if (e == "SAD") {
+        frames = sadFrames;
+        frameCount = sizeof(sadFrames) / sizeof(Frame);
+    } else if (e == "SLEEPY") {
+        frames = sleepyFrames;
+        frameCount =
+            sizeof(sleepyFrames) / sizeof(Frame);
+    } else {
         Serial.printf(
             "[ERROR] Unknown emotion: %s\n",
-            emotion.c_str()
+            e.c_str()
         );
         return;
     }
 
-    currentEmotion = emotion;
-    activeMotion = motion;
-    nextFrameIndex = 0;
+    emotion = e;
+    frameIndex = 0;
     nextFrameAt = millis();
     motionActive = true;
 
     Serial.printf(
-        "[EMOTION] %s\n",
-        emotion.c_str()
+        "[EMOTION] %s | %s\n",
+        e.c_str(),
+        emotionMask ? "REAL" : "SIMULATION"
     );
 
-    showLightPreset(emotion);
+    setColor(e);
 }
 
-static void sendPose(const Keyframe &frame) {
-    Serial.print("[FRAME]");
+// ==========================================
+// 11. UPDATE SERVO EMOTION
+// ==========================================
 
-    for (uint8_t i = 0; i < SERVO_COUNT; ++i) {
-        const int value = constrain(
-            static_cast<int>(HOME_TICKS[i]) +
-                frame.delta[i],
-            static_cast<int>(LOW_TICKS[i]),
-            static_cast<int>(HIGH_TICKS[i])
-        );
-
-        Serial.printf(
-            " M%u=%d",
-            SERVO_IDS[i],
-            value
-        );
-    }
-
-    Serial.println(
-        " | SIMULATION ONLY"
-    );
-}
-
-static void updateMotion() {
+void updateMotion() {
     if (
         !motionActive ||
-        activeMotion == nullptr
-    ) {
-        return;
-    }
-
-    if (
+        !frames ||
         static_cast<int32_t>(
             millis() - nextFrameAt
         ) < 0
@@ -1022,112 +723,104 @@ static void updateMotion() {
         return;
     }
 
-    if (nextFrameIndex >= activeMotion->count) {
+    if (frameIndex >= frameCount) {
         motionActive = false;
-        Serial.println(
-            "[MOTION] Done (simulation)"
-        );
+        Serial.println("[MOTION] Done");
         return;
     }
 
-    const Keyframe &frame =
-        activeMotion->frames[nextFrameIndex++];
+    const Frame &f = frames[frameIndex++];
 
-    sendPose(frame);
+    for (uint8_t i = 0; i < 4; ++i) {
+        if (!(emotionMask & (1u << i))) {
+            continue;
+        }
 
-    nextFrameAt =
-        millis() + frame.holdMs;
-}
+        int delta = f.delta[i];
 
-// ==========================================
-// 15. STATUS / HELP
-// ==========================================
+        if (
+            delta < -EMOTION_DELTA_LIMIT ||
+            delta > EMOTION_DELTA_LIMIT ||
+            !moveServo(
+                IDS[i],
+                static_cast<uint16_t>(
+                    static_cast<int>(homeTicks[i]) +
+                    delta
+                )
+            )
+        ) {
+            Serial.printf(
+                "[EMOTION ERROR] ID=%u\n", IDS[i]
+            );
 
-static void printStatus() {
-    Serial.println();
-    Serial.println(
-        "==== ROBOT LAMP STATUS ===="
-    );
+            disarm();
+            return;
+        }
+    }
 
-    Serial.printf(
-        "Emotion: %s\n",
-        currentEmotion.c_str()
-    );
-
-    Serial.println(
-        "Emotion movement: SIMULATION ONLY"
-    );
-
-    Serial.println(
-        "Manual MOVE: ENABLED (limited step)"
-    );
-
-    for (uint8_t i = 0; i < SERVO_COUNT; ++i) {
+    if (!emotionMask) {
         Serial.printf(
-            "Servo ID %u: %s\n",
-            SERVO_IDS[i],
-            servoOnline[i] ? "FOUND" : "NOT CONFIRMED"
+            "[FRAME] %s: SIMULATION ONLY\n",
+            emotion.c_str()
         );
     }
 
-    Serial.println(
-        "==========================="
-    );
+    nextFrameAt = millis() + f.holdMs;
 }
 
-static void printHelp() {
-    Serial.println();
-    Serial.println(
-        "=== ROBOT LAMP V1.7 COMMANDS ==="
+// ==========================================
+// 12. STATUS / HELP
+// ==========================================
+
+void printStatus() {
+    Serial.printf(
+        "[STATUS] Emotion=%s Servo=%s MASK=0x%02X\n",
+        emotion.c_str(),
+        emotionMask ? "REAL" : "SIMULATION",
+        emotionMask
     );
 
-    Serial.println(
-        "SCAN / READPOS / READINFO"
-    );
+    for (uint8_t id : IDS) {
+        Serial.printf(
+            "Servo ID %u: %s\n",
+            id,
+            online[id - 1]
+                ? "FOUND" : "NOT CONFIRMED"
+        );
+    }
+}
 
+void printHelp() {
     Serial.println(
-        "MOVE 1 400       : Move Servo 1"
+        "SCAN / READPOS / READINFO / STATUS / HELP"
     );
-
     Serial.println(
-        "TORQUEOFF 1     : Release Servo 1"
+        "MOVE 1 300 / TORQUEOFF 1"
     );
-
     Serial.println(
-        "IDLE / HAPPY / ANGRY / SURPRISED / SAD / SLEEPY"
+        "ARM EMOTION 1 / 2 / 3 / 4"
     );
-
     Serial.println(
-        "STOP / STATUS / HELP"
+        "ARM EMOTION ALL / DISARM"
     );
-
     Serial.println(
-        "Only MOVE commands can move real servos"
+        "IDLE / HAPPY / SAD / ANGRY / SURPRISED"
     );
-
     Serial.println(
-        "STOP only stops emotion simulation"
-    );
-
-    Serial.println(
-        "==========================="
+        "SLEEPY / STOP"
     );
 }
 
 // ==========================================
-// 16. COMMAND HANDLER
+// 13. SERIAL COMMAND HANDLER
 // ==========================================
 
-static void handleCommand(String cmd) {
+void command(String cmd) {
     cmd.trim();
     cmd.toUpperCase();
 
     if (cmd.isEmpty()) {
         return;
-    }
-
-    if (cmd == "SHOCK") {
-        cmd = "SURPRISED";
     }
 
     if (cmd == "SCAN") {
@@ -1136,76 +829,12 @@ static void handleCommand(String cmd) {
     }
 
     if (cmd == "READPOS") {
-        readAllPositions();
+        readPositions();
         return;
     }
 
     if (cmd == "READINFO") {
-        readAllServoInfo();
-        return;
-    }
-
-    if (cmd.startsWith("MOVE ")) {
-        unsigned int id = 0;
-        unsigned int target = 0;
-        char extra = '\0';
-
-        Serial.println(
-            "===== MOVE RESPONSE ====="
-        );
-
-        const int parsed = sscanf(
-            cmd.c_str(),
-            "MOVE %u %u %c",
-            &id, &target, &extra
-        );
-
-        if (
-            parsed != 2 ||
-            id < 1 ||
-            id > 4 ||
-            target > 1023
-        ) {
-            Serial.println(
-                "[MOVE ERROR] Usage: MOVE 1 400"
-            );
-        } else {
-            moveOneServo(
-                static_cast<uint8_t>(id),
-                static_cast<uint16_t>(target)
-            );
-        }
-
-        Serial.println(
-            "===== MOVE RESPONSE END ====="
-        );
-        return;
-    }
-
-    if (cmd.startsWith("TORQUEOFF ")) {
-        unsigned int id = 0;
-        char extra = '\0';
-
-        const int parsed = sscanf(
-            cmd.c_str(),
-            "TORQUEOFF %u %c",
-            &id, &extra
-        );
-
-        if (
-            parsed == 1 &&
-            id >= 1 &&
-            id <= 4
-        ) {
-            torqueOffOneServo(
-                static_cast<uint8_t>(id)
-            );
-        } else {
-            Serial.println(
-                "[TORQUE ERROR] Usage: TORQUEOFF 1"
-            );
-        }
-
+        readInfo();
         return;
     }
 
@@ -1219,44 +848,166 @@ static void handleCommand(String cmd) {
         return;
     }
 
+    if (
+        cmd == "DISARM" ||
+        cmd == "EMOTION DISARM"
+    ) {
+        disarm();
+        return;
+    }
+
     if (cmd == "STOP") {
-        motionActive = false;
-        activeMotion = nullptr;
-        currentEmotion = "STOP";
-        showLightPreset("STOP");
+        disarm();
+        emotion = "STOP";
+        setColor("STOP");
 
         Serial.println(
-            "[STOP] Simulation stopped; NOT hardware E-stop"
+            "[STOP] No new frames; NOT hardware E-stop"
         );
+        return;
+    }
+
+    // ======================================
+    // ARM EMOTION
+    // ======================================
+
+    if (cmd == "ARM EMOTION ALL") {
+        armEmotion(0x0F);
         return;
     }
 
     if (
-        cmd == "DISARM" ||
-        cmd == "ARM SERVOS"
+        cmd.startsWith("ARM EMOTION ") &&
+        cmd.length() == 13 &&
+        cmd[12] >= '1' &&
+        cmd[12] <= '4'
     ) {
-        Serial.println(
-            "[SAFE] Use individual MOVE / TORQUEOFF"
+        armEmotion(
+            1u << (cmd[12] - '1')
         );
         return;
     }
 
+    // ======================================
+    // TORQUE OFF
+    // ======================================
+
+    if (cmd.startsWith("TORQUEOFF ")) {
+        unsigned int id = 0;
+        char extra;
+
+        disarm();
+
+        if (
+            sscanf(
+                cmd.c_str(),
+                "TORQUEOFF %u %c",
+                &id, &extra
+            ) == 1 &&
+            id >= 1 &&
+            id <= 4
+        ) {
+            Serial.printf(
+                "[TORQUEOFF] ID %u: %s\n",
+                id,
+                torqueSet(id, false)
+                    ? "ACK" : "FAILED"
+            );
+        } else {
+            Serial.println(
+                "[ERROR] Usage: TORQUEOFF 1"
+            );
+        }
+
+        return;
+    }
+
+    // ======================================
+    // MANUAL MOVE
+    // ======================================
+
+    if (cmd.startsWith("MOVE ")) {
+        unsigned int id = 0;
+        unsigned int target = 0;
+        char extra;
+
+        disarm();
+
+        if (
+            sscanf(
+                cmd.c_str(),
+                "MOVE %u %u %c",
+                &id, &target, &extra
+            ) == 2 &&
+            id >= 1 &&
+            id <= 4 &&
+            target <= 1023
+        ) {
+            moveServo(id, target);
+        } else {
+            Serial.println(
+                "[ERROR] Usage: MOVE 1 300"
+            );
+        }
+
+        return;
+    }
+
+    // Other commands are emotion names.
     setEmotion(cmd);
 }
 
 // ==========================================
-// 17. READ USB SERIAL
+// 14. SETUP
 // ==========================================
 
-static void pollUsbCommands() {
-    while (Serial.available() > 0) {
-        const char c =
+void setup() {
+    Serial.begin(USB_BAUD);
+    rxLine.reserve(64);
+
+    ring.begin();
+    ring.setBrightness(LED_BRIGHTNESS);
+    ring.clear();
+    ring.show();
+
+    Serial2.begin(
+        SERVO_BAUD,
+        SERIAL_8N1,
+        SERVO_RX,
+        SERVO_TX
+    );
+
+    delay(300);
+
+    Serial.println(
+        "=== ROBOT LAMP V1.8 / ESP32 READY ==="
+    );
+
+    setColor("IDLE");
+
+    scanServos();
+    printHelp();
+    printStatus();
+
+    Serial.println(
+        "[READY] Simulation until ARM EMOTION"
+    );
+}
+
+// ==========================================
+// 15. MAIN LOOP
+// ==========================================
+
+void loop() {
+    while (Serial.available()) {
+        char c =
             static_cast<char>(Serial.read());
 
         if (c == '\n' || c == '\r') {
-            if (rxLine.length() > 0) {
-                handleCommand(rxLine);
+            if (rxLine.length()) {
+                command(rxLine);
             }
+
             rxLine = "";
 
         } else if (rxLine.length() < 63) {
@@ -1264,63 +1015,12 @@ static void pollUsbCommands() {
 
         } else {
             rxLine = "";
+
             Serial.println(
                 "[ERROR] Command too long"
             );
         }
     }
-}
 
-// ==========================================
-// 18. SETUP
-// ==========================================
-
-void setup() {
-    pinMode(2, OUTPUT);
-    digitalWrite(2, LOW);
-
-    Serial.begin(USB_BAUD);
-    rxLine.reserve(64);
-
-    rgbRing.begin();
-    rgbRing.setBrightness(
-        ROBOT_LED_BRIGHTNESS
-    );
-    rgbRing.clear();
-    rgbRing.show();
-
-    Serial2.begin(
-        SERVO_BAUD,
-        SERIAL_8N1,
-        SERVO_RX_PIN,
-        SERVO_TX_PIN
-    );
-
-    delay(300);
-
-    Serial.println();
-    Serial.println(
-        "=== ROBOT LAMP V1.7 / ESP32 READY ==="
-    );
-
-    showLightPreset("IDLE");
-
-    scanServos();
-    printHelp();
-    printStatus();
-
-    Serial.println(
-        "[READY] Manual MOVE available; no startup motion"
-    );
-}
-
-// ==========================================
-// 19. MAIN LOOP
-// ==========================================
-
-void loop() {
-    pollUsbCommands();
-
-    // Emotion motion is simulation only.
     updateMotion();
 }
