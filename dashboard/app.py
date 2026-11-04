@@ -1,8 +1,13 @@
 
-"""
-Robot Lamp FK / IK Dashboard
-ESP32 + SCS15 Servo ID 1-4
-Run: py -3.11 dashboard/app.py
+"""Robot Lamp Dashboard - Direct Target Ticks.
+ESP32 V1.8 / SCS15 Servo ID 1-4 / COM3 / 115200.
+
+Fixed:
+- READPOS / READINFO accept 4 servo responses
+- MOVE OK accepts responses with or without SPEED
+- Step-by-step movement with actual feedback
+- Software SETZERO
+- Cancel future movement steps
 """
 
 import json
@@ -14,47 +19,91 @@ from pathlib import Path
 import serial
 from flask import Flask, jsonify, request, send_file
 
+
+# ==========================================
+# 1. CONFIGURATION
+# ==========================================
+
 BASE = Path(__file__).resolve().parent
+
 PORT = "COM3"
 BAUD = 115200
+SERVO_HARDWARE_ENABLED = False
 IDS = (1, 2, 3, 4)
 
 ZERO_FILE = BASE / "servo_zeros.json"
-INDEX_FILE = BASE / "templates" / "index.html"
+HTML_FILE = BASE / "templates" / "index.html"
 
-SAFE_MARGIN = 20
-MAX_STEP = 25
-POS_MAX_AGE = 8.0
-INFO_MAX_AGE = 70.0
+MARGIN = 20
+STEP = 20
+TOLERANCE = 1
+
+STEP_TIMEOUT = 8
+TOTAL_TIMEOUT = 120
 
 app = Flask(__name__)
-lock = threading.RLock()
+
+state_lock = threading.RLock()
 serial_lock = threading.Lock()
-device = None
+cancel_event = threading.Event()
+
+port = None
+
+
+# ==========================================
+# 2. SERVO STATES
+# ==========================================
 
 servos = {
-    i: {
-        "id": i,
-        "actual": None,
-        "min": None,
-        "max": None,
-        "voltage": None,
-        "temperature": None,
-        "online": False,
-        "zero": None,
-    }
+    i: dict(
+        id=i,
+        actual=None,
+        min=None,
+        max=None,
+        voltage=None,
+        temperature=None,
+        online=False,
+        zero=None
+    )
     for i in IDS
 }
 
-state = {
-    "connected": False,
-    "info_ready": False,
-    "busy": False,
-    "error": None,
-    "pos_at": 0.0,
-    "info_at": 0.0,
-}
+state = dict(
+    connected=False,
+    info_ready=False,
+    busy=False,
+    error=None,
+    position_at=0.0,
+    info_at=0.0
+)
 
+
+# ==========================================
+# 3. ESP32 RESPONSE PATTERNS
+# ==========================================
+
+POS_RE = re.compile(
+    r"^\[POSITION\] Servo ID (\d+) = (\d+) ticks$"
+)
+
+INFO_RE = re.compile(
+    r"^\[INFO\] ID=(\d+) MIN=(\d+) MAX=(\d+) "
+    r"VOLTAGE=([\d.]+) TEMP=(\d+)$"
+)
+
+# Supports both:
+# [MOVE OK] ID=4 FROM=304 TARGET=284
+# [MOVE OK] ID=4 FROM=304 TARGET=284 SPEED=80
+
+MOVE_RE = re.compile(
+    r"^\[MOVE OK\]\s+ID=(\d+)\s+FROM=(\d+)\s+"
+    r"TARGET=(\d+)(?:\s+SPEED=(\d+))?$"
+)
+
+
+# ==========================================
+# 4. LOAD / SAVE SOFTWARE ZERO
+# ==========================================
 
 def load_zeros():
     try:
@@ -71,7 +120,12 @@ def load_zeros():
             ):
                 servos[i]["zero"] = value
 
-    except (OSError, ValueError, TypeError):
+    except (
+        OSError,
+        ValueError,
+        TypeError,
+        AttributeError
+    ):
         pass
 
 
@@ -86,207 +140,246 @@ def save_zeros():
 
     temp.write_text(
         json.dumps(data, indent=2),
-        encoding="utf-8",
+        encoding="utf-8"
     )
 
     temp.replace(ZERO_FILE)
 
 
-def transact(command, begin, end, seconds):
-    global device
+# ==========================================
+# 5. SERIAL TRANSACTION
+# ==========================================
 
-    if device is None or not device.is_open:
-        device = serial.Serial(
+def transact(command, timeout):
+    """
+    READPOS:
+        Complete when all four IDs respond.
+
+    READINFO:
+        Complete when all four IDs respond.
+
+    MOVE:
+        Complete when MOVE OK is received,
+        with or without SPEED.
+
+    Caller must hold serial_lock.
+    """
+
+    global port
+
+    if port is None or not port.is_open:
+        port = serial.Serial(
             PORT,
             BAUD,
-            timeout=0.10,
-            write_timeout=0.6,
+            timeout=0.12,
+            write_timeout=0.8
         )
 
         time.sleep(1.8)
 
-    device.reset_input_buffer()
+    port.reset_input_buffer()
 
-    device.write(
+    port.write(
         (command + "\n").encode("ascii")
     )
 
-    device.flush()
+    port.flush()
 
-    deadline = time.monotonic() + seconds
-    started = False
+    deadline = time.monotonic() + timeout
+
     lines = []
+    found = set()
 
     while time.monotonic() < deadline:
-        raw = device.readline()
+        raw = port.readline()
 
         if not raw:
             continue
 
         line = raw.decode(
             "utf-8",
-            errors="replace",
+            errors="replace"
         ).strip()
 
-        if begin in line:
-            started = True
-            lines = []
+        if not line:
+            continue
 
-        elif started and end in line:
-            return lines
+        lines.append(line)
+        lines = lines[-70:]
 
-        elif started:
-            lines.append(line)
+        # READPOS
+        if command == "READPOS":
+            match = POS_RE.fullmatch(line)
+
+            if match and int(match[1]) in IDS:
+                found.add(int(match[1]))
+
+            if len(found) == len(IDS):
+                return lines
+
+        # READINFO
+        elif command == "READINFO":
+            match = INFO_RE.fullmatch(line)
+
+            if match and int(match[1]) in IDS:
+                found.add(int(match[1]))
+
+            if len(found) == len(IDS):
+                return lines
+
+        # MOVE
+        elif command.startswith("MOVE "):
+
+            if MOVE_RE.fullmatch(line):
+                return lines
+
+            if (
+                "[MOVE ERROR]" in line
+                or "[MOVE FAIL]" in line
+            ):
+                raise RuntimeError(
+                    "ESP32 refused MOVE: " + line
+                )
 
     raise TimeoutError(
-        f"ESP32 did not complete {command}"
+        f"{command} timeout; "
+        f"received={lines[-10:]}"
     )
 
 
-def refresh_positions():
-    lines = transact(
-        "READPOS",
-        "===== REAL SERVO POSITIONS",
-        "===== READ COMPLETE",
-        7.0,
-    )
+# ==========================================
+# 6. READ ACTUAL POSITIONS
+# ==========================================
 
-    positions = {}
+def read_positions():
+    lines = transact("READPOS", 8)
+
+    found = {}
 
     for line in lines:
-        m = re.fullmatch(
-            r"\[POSITION\] Servo ID (\d+) = (\d+) ticks",
-            line,
-        )
+        match = POS_RE.fullmatch(line)
 
-        if m and int(m[1]) in IDS:
-            positions[int(m[1])] = int(m[2])
+        if match and int(match[1]) in IDS:
+            found[int(match[1])] = int(match[2])
 
-    with lock:
-        for i in IDS:
-            servos[i]["actual"] = positions.get(i)
-            servos[i]["online"] = i in positions
-
-        state["connected"] = len(positions) == 4
-
-        state["pos_at"] = (
-            time.monotonic()
-            if state["connected"]
-            else 0
-        )
-
-    if len(positions) != 4:
+    if len(found) != len(IDS):
         raise RuntimeError(
-            "READPOS did not return all four servos"
+            "Missing position feedback"
         )
 
+    with state_lock:
+        for i in IDS:
+            servos[i]["actual"] = found[i]
+            servos[i]["online"] = True
 
-def refresh_info():
-    lines = transact(
-        "READINFO",
-        "===== SERVO READINFO",
-        "===== READINFO COMPLETE",
-        12.0,
-    )
+        state["connected"] = True
+        state["position_at"] = time.monotonic()
 
-    values = {}
+
+# ==========================================
+# 7. READ SERVO INFORMATION
+# ==========================================
+
+def read_info():
+    lines = transact("READINFO", 15)
+
+    found = {}
 
     for line in lines:
-        m = re.fullmatch(
-            r"\[INFO\] ID=(\d+) MIN=(\d+) MAX=(\d+) "
-            r"VOLTAGE=([\d.]+) TEMP=(\d+)",
-            line,
-        )
+        match = INFO_RE.fullmatch(line)
 
-        if m and int(m[1]) in IDS:
-            values[int(m[1])] = (
-                int(m[2]),
-                int(m[3]),
-                float(m[4]),
-                int(m[5]),
+        if match and int(match[1]) in IDS:
+            found[int(match[1])] = (
+                int(match[2]),
+                int(match[3]),
+                float(match[4]),
+                int(match[5])
             )
 
-    with lock:
-        for i in IDS:
-            if i in values:
-                low, high, volt, temp = values[i]
-
-                servos[i].update(
-                    min=low,
-                    max=high,
-                    voltage=volt,
-                    temperature=temp,
-                )
-            else:
-                servos[i].update(
-                    min=None,
-                    max=None,
-                    voltage=None,
-                    temperature=None,
-                )
-
-        state["info_ready"] = len(values) == 4
-
-        state["info_at"] = (
-            time.monotonic()
-            if state["info_ready"]
-            else 0
-        )
-
-    if len(values) != 4:
+    if len(found) != len(IDS):
         raise RuntimeError(
-            "READINFO did not return all four servos"
+            "Missing servo information"
         )
 
+    with state_lock:
+        for i in IDS:
+            low, high, voltage, temperature = found[i]
 
-def safe_readings(i, target=None):
-    with lock:
+            servos[i].update(
+                min=low,
+                max=high,
+                voltage=voltage,
+                temperature=temperature
+            )
+
+        state["info_ready"] = True
+        state["info_at"] = time.monotonic()
+
+
+# ==========================================
+# 8. REFRESH SERVO
+# ==========================================
+
+def refresh(force_info=False):
+    read_positions()
+
+    if (
+        force_info
+        or time.monotonic() - state["info_at"] > 30
+    ):
+        read_info()
+
+    with state_lock:
+        state["error"] = None
+
+
+# ==========================================
+# 9. VALIDATE SERVO FEEDBACK
+# ==========================================
+
+def checked_servo(i, target=None):
+    with state_lock:
         s = dict(servos[i])
-        now = time.monotonic()
 
-        if not (
+        ready = (
             state["connected"]
             and state["info_ready"]
             and s["online"]
-        ):
-            raise ValueError(
-                "ESP32/Servo is not ready"
-            )
+        )
 
-        if (
-            now - state["pos_at"] > POS_MAX_AGE
-            or now - state["info_at"] > INFO_MAX_AGE
-        ):
-            raise ValueError(
-                "Servo feedback is stale; press Refresh"
-            )
+        fresh = (
+            time.monotonic() - state["position_at"] < 8
+            and time.monotonic() - state["info_at"] < 70
+        )
+
+    if not ready or not fresh:
+        raise ValueError(
+            "Servo feedback missing or stale"
+        )
 
     actual = s["actual"]
     low = s["min"]
     high = s["max"]
 
-    if not all(
-        type(x) is int
-        for x in (actual, low, high)
-    ):
-        raise ValueError(
-            "Missing actual position or hardware limits"
+    if (
+        not all(
+            type(v) is int
+            for v in (actual, low, high)
         )
-
-    if not (
-        0 <= low < high <= 1023
-        and low <= actual <= high
+        or not (
+            0 <= low <= actual <= high <= 1023
+        )
     ):
         raise ValueError(
-            "Invalid hardware limits or actual position"
+            "Invalid actual ticks or servo limits"
         )
 
     if (
         s["voltage"] is None
-        or not (6.5 <= s["voltage"] <= 8.4)
+        or not 6.5 <= s["voltage"] <= 8.4
     ):
         raise ValueError(
-            "Servo voltage is outside 6.5-8.4 V"
+            "Servo voltage outside configured limits"
         )
 
     if (
@@ -294,87 +387,245 @@ def safe_readings(i, target=None):
         or s["temperature"] >= 55
     ):
         raise ValueError(
-            "Servo temperature is unsafe"
+            "Servo temperature too high"
         )
 
     if target is not None:
         if not (
-            low + SAFE_MARGIN
+            low + MARGIN
             <= target
-            <= high - SAFE_MARGIN
+            <= high - MARGIN
         ):
             raise ValueError(
-                f"Target must be within "
-                f"{low + SAFE_MARGIN}.."
-                f"{high - SAFE_MARGIN}"
-            )
-
-        if abs(target - actual) > MAX_STEP:
-            raise ValueError(
-                f"Max {MAX_STEP} ticks per command"
+                f"Target must be "
+                f"{low + MARGIN}..{high - MARGIN} ticks"
             )
 
     return s
 
 
-def serial_poll_loop():
-    global device
+# ==========================================
+# 10. BACKGROUND POLLING
+# ==========================================
+
+def background_poll():
+    global port
 
     while True:
+
+        # ยังไม่ต่อ Servo ไม่ต้องส่ง READPOS / READINFO
+        if not SERVO_HARDWARE_ENABLED:
+            time.sleep(2)
+            continue
+
         try:
             with serial_lock:
-                refresh_positions()
-
-                with lock:
-                    need_info = (
-                        time.monotonic()
-                        - state["info_at"] > 30
-                    )
-
-                if need_info:
-                    refresh_info()
-
-            with lock:
-                state["error"] = None
+                refresh()
 
         except Exception as exc:
-            with lock:
+            with state_lock:
                 state.update(
                     connected=False,
                     info_ready=False,
-                    pos_at=0,
-                    info_at=0,
-                    error=str(exc),
+                    position_at=0.0,
+                    info_at=0.0,
+                    error=str(exc)
                 )
 
                 for i in IDS:
                     servos[i]["online"] = False
 
-            try:
-                if device is not None:
-                    device.close()
-            except Exception:
-                pass
+        with serial_lock:
+             try:
+                 if port is not None:
+                     port.close()
+             except Exception:
+                 pass
 
-            device = None
+             port = None
 
-        time.sleep(2.0)
+        time.sleep(2)
 
+
+# ==========================================
+# 11. MOVE SERVO TO TARGET TICKS
+# ==========================================
+
+def move_absolute(i, target):
+    """
+    Move one servo using small steps.
+
+    Each step is verified using real
+    position feedback from the ESP32.
+
+    This is not collision-aware planning.
+    """
+
+    started = time.monotonic()
+
+    refresh(force_info=True)
+
+    before = checked_servo(
+        i,
+        target
+    )["actual"]
+
+    sent_any = False
+    firmware_speed = None
+
+    while (
+        time.monotonic() - started
+        < TOTAL_TIMEOUT
+    ):
+
+        if cancel_event.is_set():
+            raise RuntimeError(
+                "Cancelled next steps "
+                "(NOT hardware E-stop)"
+            )
+
+        read_positions()
+
+        s = checked_servo(i, target)
+        actual = s["actual"]
+
+        difference = target - actual
+
+        # Target reached or within tolerance
+        if (
+            difference == 0
+            or (
+                sent_any
+                and abs(difference) <= TOLERANCE
+            )
+        ):
+            return dict(
+                id=i,
+                before=before,
+                target=target,
+                actual=actual,
+                reached=(
+                    abs(difference) <= TOLERANCE
+                ),
+                firmware_speed=firmware_speed
+            )
+
+        step = min(
+            abs(difference),
+            STEP
+        )
+
+        next_target = actual + (
+            step if difference > 0 else -step
+        )
+
+        checked_servo(i, next_target)
+
+        # Send MOVE to ESP32
+        lines = transact(
+            f"MOVE {i} {next_target}",
+            8
+        )
+
+        match = next(
+            (
+                m
+                for line in lines
+                if (m := MOVE_RE.fullmatch(line))
+            ),
+            None
+        )
+
+        if (
+            not match
+            or int(match[1]) != i
+            or int(match[3]) != next_target
+        ):
+            raise RuntimeError(
+                "Unexpected MOVE response: "
+                + str(lines[-6:])
+            )
+
+        # IMPORTANT FIX:
+        # SPEED may be missing in ESP32 response.
+
+        firmware_speed = (
+            int(match.group(4))
+            if match.group(4) is not None
+            else None
+        )
+
+        sent_any = True
+
+        # Verify physical feedback
+        tolerance = (
+            0 if step <= 2
+            else TOLERANCE
+        )
+
+        step_started = time.monotonic()
+
+        while (
+            time.monotonic() - step_started
+            < STEP_TIMEOUT
+        ):
+
+            if cancel_event.is_set():
+                raise RuntimeError(
+                    "Cancelled next steps; "
+                    "current motor may still move"
+                )
+
+            time.sleep(0.2)
+
+            read_positions()
+
+            position = checked_servo(i)["actual"]
+
+            if (
+                abs(position - next_target)
+                <= tolerance
+            ):
+                break
+
+        else:
+            raise TimeoutError(
+                f"Servo {i} did not reach "
+                f"{next_target} ticks; "
+                "refresh Actual before retrying"
+            )
+
+    raise TimeoutError(
+        "Total move timeout; "
+        "refresh Actual before retrying"
+    )
+
+
+# ==========================================
+# 12. FLASK API
+# ==========================================
 
 @app.after_request
 def no_cache(response):
-    response.headers["Cache-Control"] = "no-store"
+    response.headers[
+        "Cache-Control"
+    ] = "no-store"
+
     return response
 
 
 @app.get("/")
 def home():
-    return send_file(INDEX_FILE)
+    return send_file(HTML_FILE)
 
+
+# ==========================================
+# 13. STATUS API
+# ==========================================
 
 @app.get("/api/status")
 def api_status():
-    with lock:
+    with state_lock:
         return jsonify(
             ok=True,
             connected=state["connected"],
@@ -382,41 +633,77 @@ def api_status():
             busy=state["busy"],
             error=state["error"],
             servos=[
-                dict(servos[i]) for i in IDS
-            ],
+                dict(servos[i])
+                for i in IDS
+            ]
         )
 
 
+# ==========================================
+# 14. DIAGNOSTICS API
+# ==========================================
+
+@app.get("/api/diagnostics")
+def api_diagnostics():
+    with state_lock:
+        return jsonify(
+            ok=True,
+            port=PORT,
+            baud=BAUD,
+            connected=state["connected"],
+            info_ready=state["info_ready"],
+            busy=state["busy"],
+            serial_open=bool(
+                port and port.is_open
+            ),
+            last_error=state["error"],
+            servo_online={
+                str(i): servos[i]["online"]
+                for i in IDS
+            }
+        )
+
+
+# ==========================================
+# 15. REFRESH API
+# ==========================================
+
 @app.post("/api/refresh")
 def api_refresh():
+
+    if not SERVO_HARDWARE_ENABLED:
+        return jsonify(
+            ok=False,
+            error="Servo hardware not connected"
+        ), 409
+
     try:
         with serial_lock:
-            refresh_positions()
-
-            with lock:
-                need_info = (
-                    time.monotonic()
-                    - state["info_at"] > 30
-                )
-
-            if need_info:
-                refresh_info()
+            refresh(force_info=True)
 
         return api_status()
 
     except Exception as exc:
+        with state_lock:
+            state["error"] = str(exc)
+
         return jsonify(
             ok=False,
-            error=str(exc),
+            error=str(exc)
         ), 503
 
 
+# ==========================================
+# 16. SOFTWARE SETZERO API
+# ==========================================
+
 @app.post("/api/servo/<int:sid>/zero")
 def api_zero(sid):
+
     if sid not in IDS:
         return jsonify(
             ok=False,
-            error="Invalid servo ID",
+            error="Unknown servo"
         ), 404
 
     if request.get_json(silent=True) != {
@@ -424,149 +711,331 @@ def api_zero(sid):
     }:
         return jsonify(
             ok=False,
-            error="Confirmation required",
+            error="Confirmation flag missing"
         ), 400
+
+    with state_lock:
+        if state["busy"]:
+            return jsonify(
+                ok=False,
+                error="Servo is moving"
+            ), 409
+
+        state["busy"] = True
 
     try:
         with serial_lock:
-            refresh_positions()
+            refresh(force_info=True)
 
-            with lock:
-                if state["busy"]:
-                    raise ValueError(
-                        "Movement in progress"
-                    )
+            s = checked_servo(sid)
 
-            s = safe_readings(sid)
-
-            with lock:
+            with state_lock:
                 servos[sid]["zero"] = s["actual"]
                 save_zeros()
 
         return jsonify(
             ok=True,
-            zero=s["actual"],
+            zero=s["actual"]
         )
 
     except Exception as exc:
         return jsonify(
             ok=False,
-            error=str(exc),
+            error=str(exc)
         ), 409
 
+    finally:
+        with state_lock:
+            state["busy"] = False
+
+
+# ==========================================
+# 17. REAL MOVE API
+# ==========================================
 
 @app.post("/api/servo/<int:sid>/move")
 def api_move(sid):
+
     if sid not in IDS:
         return jsonify(
             ok=False,
-            error="Invalid servo ID",
+            error="Unknown servo"
         ), 404
 
-    body = request.get_json(silent=True) or {}
-    target = body.get("target")
+    data = request.get_json(
+        silent=True
+    ) or {}
+
+    target = data.get("target")
 
     if (
-        body.get("confirm") is not True
-        or type(target) is not int
+        type(target) is not int
+        or not 0 <= target <= 1023
     ):
         return jsonify(
             ok=False,
             error=(
-                "Integer target and "
-                "confirmation required"
-            ),
+                "Target must be integer ticks "
+                "0..1023"
+            )
         ), 400
+
+    with state_lock:
+        if state["busy"]:
+            return jsonify(
+                ok=False,
+                error="Another command is running"
+            ), 409
+
+        state["busy"] = True
+
+    cancel_event.clear()
 
     try:
         with serial_lock:
-            with lock:
-                if state["busy"]:
-                    raise ValueError(
-                        "Another movement is in progress"
-                    )
+            result = move_absolute(
+                sid,
+                target
+            )
 
-                state["busy"] = True
-
-            try:
-                refresh_positions()
-
-                s = safe_readings(
-                    sid,
-                    target,
-                )
-
-                if s["actual"] == target:
-                    return jsonify(
-                        ok=True,
-                        target=target,
-                        message="Already at target",
-                    )
-
-                lines = transact(
-                    f"MOVE {sid} {target}",
-                    "===== MOVE RESPONSE =====",
-                    "===== MOVE RESPONSE END =====",
-                    16.0,
-                )
-
-                match = next(
-                    (
-                        re.fullmatch(
-                            r"\[MOVE OK\] ID=(\d+) "
-                            r"FROM=(\d+) TARGET=(\d+) "
-                            r"SPEED=(\d+)",
-                            line,
-                        )
-                        for line in lines
-                        if line.startswith("[MOVE OK]")
-                    ),
-                    None,
-                )
-
-                if (
-                    not match
-                    or int(match[1]) != sid
-                    or int(match[3]) != target
-                ):
-                    raise ValueError(
-                        "MOVE rejected by ESP32: "
-                        + " | ".join(lines[-4:])
-                    )
-
-                return jsonify(
-                    ok=True,
-                    target=target,
-                    firmware_speed=int(match[4]),
-                )
-
-            finally:
-                with lock:
-                    state["busy"] = False
+        return jsonify(
+            ok=True,
+            **result
+        )
 
     except Exception as exc:
+        with state_lock:
+            state["error"] = str(exc)
+
         return jsonify(
             ok=False,
             error=str(exc),
+            note=(
+                "Read Actual position "
+                "before retrying"
+            )
         ), 409
 
+    finally:
+        with state_lock:
+            state["busy"] = False
+
+
+# ==========================================
+# 18. CANCEL API
+# ==========================================
+
+@app.post("/api/cancel")
+def api_cancel():
+    cancel_event.set()
+
+    return jsonify(
+        ok=True,
+        message=(
+            "Will stop sending next steps; "
+            "NOT hardware E-stop"
+        )
+    )
+
+
+# ==========================================
+# 19. START FLASK SERVER
+# ==========================================
+
+
+
+# =====================================
+# EMOTION BRIDGE
+# Camera/Voice -> Flask -> ESP32
+# =====================================
+
+@app.post("/api/emotion")
+def api_emotion():
+    global port
+
+    data = request.get_json(silent=True) or {}
+    emotion = data.get("emotion", "")
+
+    allowed = {
+        "IDLE",
+        "HAPPY",
+        "ANGRY",
+        "SURPRISED",
+        "SAD",
+        "SLEEPY",
+    }
+
+    if type(emotion) is not str or emotion not in allowed:
+        return jsonify(
+            ok=False,
+            error="Unknown emotion"
+        ), 400
+
+    with state_lock:
+        if state["busy"]:
+            return jsonify(
+                ok=False,
+                error="Servo movement in progress"
+            ), 409
+
+    try:
+        with serial_lock:
+
+            with state_lock:
+                if state["busy"]:
+                    return jsonify(
+                        ok=False,
+                        error="Servo movement in progress"
+                    ), 409
+
+            if port is None or not port.is_open:
+                port = serial.Serial(
+                    PORT,
+                    BAUD,
+                    timeout=0.12,
+                    write_timeout=0.8
+                )
+
+                time.sleep(1.8)
+
+            port.reset_input_buffer()
+
+            port.write(
+                (emotion + "\n").encode("ascii")
+            )
+
+            port.flush()
+
+            lines = []
+            deadline = time.monotonic() + 3.0
+
+            while time.monotonic() < deadline:
+
+                raw = port.readline()
+
+                if not raw:
+                    continue
+
+                line = raw.decode(
+                    "utf-8",
+                    errors="replace"
+                ).strip()
+
+                if not line:
+                    continue
+
+                lines.append(line)
+
+                if (
+    line == f"[EMOTION] {emotion}"
+    or line.startswith(f"[EMOTION] {emotion} |")
+):
+                    return jsonify(
+                        ok=True,
+                        emotion=emotion,
+                        acknowledged=True
+                    )
+
+                if line.startswith("[ERROR]"):
+
+                    # Ignore missing servo reports
+                    # only when hardware is not connected.
+                    servo_error = (
+                        line.startswith("[ERROR] Servo ID ")
+                        or re.match(
+                            r"^\[ERROR\] ID \d+ "
+                            r"(READPOS|READINFO) failed",
+                            line
+                        )
+                    )
+
+                    if (
+                        not SERVO_HARDWARE_ENABLED
+                        and servo_error
+                    ):
+                        print(
+                            "[SERVO NOT CONNECTED]",
+                            line
+                        )
+                        continue
+
+                    # Keep other firmware errors visible.
+                    return jsonify(
+                        ok=False,
+                        error=line
+                    ), 409
+
+            raise TimeoutError(
+                f"ESP32 did not acknowledge "
+                f"{emotion}; {lines[-8:]}"
+            )
+
+    except Exception as exc:
+
+        # Recover from invalid/disconnected COM3 handle.
+        if isinstance(
+            exc,
+            (OSError, serial.SerialException)
+        ):
+            try:
+                if port is not None:
+                    port.close()
+            except Exception:
+                pass
+
+            # Reopen COM3 on the next request.
+            port = None
+
+        return jsonify(
+            ok=False,
+            error=str(exc)
+        ), 503
+
+
+@app.get("/api/emotion/capabilities")
+def api_emotion_capabilities():
+
+    return jsonify(
+        ok=True,
+        emotions=[
+            "IDLE",
+            "HAPPY",
+            "ANGRY",
+            "SURPRISED",
+            "SAD",
+            "SLEEPY",
+        ],
+        protocol=(
+            "ESP32 serial emotion commands, "
+            "no auto ARM"
+        )
+    )
 
 if __name__ == "__main__":
+
     load_zeros()
 
-    threading.Thread(
-        target=serial_poll_loop,
-        daemon=True,
-    ).start()
+    if SERVO_HARDWARE_ENABLED:
+        threading.Thread(
+            target=background_poll,
+            daemon=True
+        ).start()
 
     print(
-        "Robot Lamp Dashboard: "
-        "http://127.0.0.1:5000"
+        "================================"
+    )
+    print("ROBOT LAMP FK / IK DASHBOARD")
+    print(f"ESP32 PORT: {PORT}")
+    print(f"BAUD RATE: {BAUD}")
+    print(f"SERVO IDS: {IDS}")
+    print("http://127.0.0.1:5000")
+    print(
+        "================================"
     )
 
     app.run(
         host="127.0.0.1",
         port=5000,
         debug=False,
-        threaded=True,
+        threaded=True
     )

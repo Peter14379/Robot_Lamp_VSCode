@@ -1,47 +1,79 @@
 
-<!DOCTYPE html>
+<!doctype html>
 <html lang="th">
 <head>
-<meta charset="UTF-8">
+<meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-
 <title>Robot Lamp — FK / IK Dashboard</title>
 
 <style>
 :root {
     color-scheme: dark;
-    --bg: #08121f;
-    --card: #12243a;
-    --line: #28445e;
-    --text: #ecf4ff;
-    --muted: #a0b7cb;
-    --mint: #70e7c4;
-    --blue: #88baff;
-    --red: #fa8292;
+    --card: #12263c;
+    --line: #2a4964;
+    --mint: #76e7c4;
+    --muted: #a9c1d4;
 }
 
 * { box-sizing: border-box; }
 
 body {
     margin: 0;
-    background: linear-gradient(135deg, #0b1b30, #07111e);
-    color: var(--text);
-    font: 14px "Segoe UI", Tahoma, sans-serif;
+    background: linear-gradient(130deg, #0b2035, #08121e);
+    color: #eef7ff;
+    font: 14px 'Segoe UI', Tahoma, sans-serif;
+}
+
+main {
+    max-width: 1450px;
+    margin: auto;
+    padding: 22px;
+}
+
+h1 { font-size: 26px; margin: 5px 0; }
+h2 { font-size: 18px; margin: 0 0 15px; }
+h3 { margin: 0; font-size: 15px; }
+
+p { line-height: 1.55; }
+small, .muted { color: var(--muted); }
+
+header, .toolbar, .tabs, .actions,
+.servo-head, .servo-buttons {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+header, .servo-head {
+    justify-content: space-between;
+}
+
+header { margin-bottom: 16px; }
+
+.brand {
+    font-weight: 800;
+    letter-spacing: 2px;
+    color: var(--mint);
+    font-size: 12px;
+}
+
+.badge {
+    border: 1px solid var(--line);
+    padding: 10px 15px;
+    border-radius: 25px;
+    background: #1a344b;
 }
 
 button, input, select { font: inherit; }
 
 button {
-    background: #23415d;
-    color: var(--text);
-    border: 1px solid #395c79;
+    border: 1px solid #3a617e;
     border-radius: 9px;
     padding: 10px 13px;
+    background: #234661;
+    color: white;
     cursor: pointer;
-}
-
-button:hover:not(:disabled) {
-    filter: brightness(1.15);
 }
 
 button:disabled {
@@ -49,151 +81,96 @@ button:disabled {
     cursor: not-allowed;
 }
 
+button:hover:not(:disabled) {
+    filter: brightness(1.15);
+}
+
+button.active, button.primary {
+    background: var(--mint);
+    color: #052a28;
+    border-color: var(--mint);
+    font-weight: 800;
+}
+
+button.danger {
+    background: #713746;
+    border-color: #975564;
+}
+
 input, select {
-    background: #091a2a;
-    color: var(--text);
-    border: 1px solid #385874;
-    border-radius: 8px;
-    padding: 9px;
+    background: #091b2e;
+    color: #fff;
+    border: 1px solid #385a78;
+    border-radius: 9px;
+    padding: 10px;
     width: 100%;
 }
 
-input[type=checkbox] { width: auto; }
+input:disabled { opacity: .5; }
+.toolbar, .tabs { margin-bottom: 15px; }
 
-h1, h2, h3, p { margin-top: 0; }
-h1 { font-size: 25px; margin-bottom: 4px; }
-h2 { font-size: 17px; }
-small, .muted { color: var(--muted); }
-
-.wrap {
-    max-width: 1450px;
-    padding: 23px;
-    margin: auto;
-}
-
-.top {
-    display: flex;
-    justify-content: space-between;
-    gap: 14px;
-    align-items: center;
-    flex-wrap: wrap;
-    margin-bottom: 16px;
-}
-
-.brand {
-    color: var(--mint);
-    font-weight: 800;
-    letter-spacing: 1.5px;
-    font-size: 12px;
-    margin-bottom: 6px;
-}
-
-.badge {
-    background: #1b344b;
-    border: 1px solid var(--line);
-    padding: 9px 13px;
-    border-radius: 30px;
-    font-size: 12px;
-}
-
-.nav {
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    flex-wrap: wrap;
-    margin: 12px 0 17px;
-}
-
-.active {
-    background: var(--mint) !important;
-    color: #062a27 !important;
-    border-color: var(--mint) !important;
-    font-weight: bold;
+.notice {
+    background: #392b1f66;
+    border: 1px solid #8e6b3c;
+    color: #ffd7a0;
+    padding: 12px;
+    border-radius: 11px;
+    margin-bottom: 15px;
+    line-height: 1.55;
 }
 
 .columns {
     display: grid;
-    grid-template-columns: 1.15fr 1fr;
-    gap: 15px;
+    grid-template-columns: 1.05fr 1fr;
+    gap: 16px;
 }
 
 .card {
-    background: var(--card);
     border: 1px solid var(--line);
+    background: var(--card);
     border-radius: 15px;
     padding: 19px;
-    margin-bottom: 14px;
+    margin-bottom: 15px;
 }
 
-.xy {
+.metrics, .views, .feedback, .fields,
+.servo-fields {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 11px;
+    gap: 10px;
 }
 
-.canvasbox {
-    background: #081b2e;
-    border: 1px solid var(--line);
+.metrics { grid-template-columns: repeat(3, 1fr); }
+.feedback { grid-template-columns: repeat(4, 1fr); }
+.views { grid-template-columns: 1fr 1fr; }
+
+.fields, .servo-fields {
+    grid-template-columns: repeat(3, 1fr);
+}
+
+.metric, .feedback > div {
+    background: #0b2033;
+    border: 1px solid #2e4c65;
     border-radius: 11px;
     padding: 12px;
 }
 
-.canvasbox b {
-    font-size: 12px;
-    color: var(--muted);
+.metric strong, .feedback strong {
+    display: block;
+    font-size: 23px;
+    margin-top: 6px;
+}
+
+.views > div {
+    background: #081b2e;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 10px;
 }
 
 canvas {
     display: block;
     width: 100%;
-    height: 230px;
-}
-
-.metrics {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 9px;
-}
-
-.metric {
-    padding: 13px;
-    background: #0b2032;
-    border: 1px solid var(--line);
-    border-radius: 11px;
-}
-
-.metric strong {
-    display: block;
-    font-size: 25px;
-    margin: 5px 0;
-}
-
-.feedback {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 9px;
-}
-
-.feedback div {
-    background: #0c2034;
-    border: 1px solid var(--line);
-    padding: 12px;
-    border-radius: 10px;
-}
-
-.feedback b {
-    display: block;
-    font-size: 20px;
-    margin: 6px 0;
-}
-
-.panel { display: none; }
-.panel.show { display: block; }
-
-.fields {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 10px;
+    height: 210px;
 }
 
 .field {
@@ -205,367 +182,359 @@ canvas {
     display: block;
     font-size: 12px;
     color: var(--muted);
-    margin-bottom: 5px;
+    margin-bottom: 6px;
 }
 
-.actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-top: 16px;
+.panel { display: none; }
+.panel.show { display: block; }
+.actions { margin-top: 15px; }
+
+.servo-card {
+    background: #0b2034;
+    border: 1px solid #2e4e66;
+    border-radius: 12px;
+    padding: 14px;
+    margin: 11px 0;
 }
 
-.primary {
-    background: var(--mint);
-    color: #062b29;
-    font-weight: 800;
-    border-color: var(--mint);
-}
+.servo-head { margin-bottom: 8px; }
 
-.red {
-    background: #673345;
-    border-color: #955164;
-}
-
-.blue { background: #25588b; }
-.sub { background: #10273e; }
-
-.joint {
-    display: grid;
-    grid-template-columns: 68px 1fr 1fr auto;
+.servo-fields {
     align-items: end;
-    gap: 9px;
-    margin-bottom: 12px;
-    background: #0c2035;
-    padding: 10px;
-    border-radius: 10px;
+    margin-top: 12px;
 }
 
-.jbuttons {
-    display: flex;
-    gap: 4px;
-    flex-wrap: wrap;
+.servo-buttons {
+    margin-top: 11px;
+    gap: 7px;
 }
 
-.notice {
-    padding: 12px;
-    border: 1px solid #896b39;
-    background: #3e311b55;
-    border-radius: 10px;
-    color: #ffd49e;
-    line-height: 1.6;
-    margin-bottom: 13px;
+.servo-buttons button {
+    flex: 1;
+    min-width: 90px;
+}
+
+.msg {
+    min-height: 20px;
+    margin-top: 12px;
 }
 
 .ok { color: var(--mint); }
-.error { color: var(--red); }
+.error { color: #ff9da6; }
 
 #log {
     margin: 0;
     white-space: pre-wrap;
-    max-height: 140px;
+    max-height: 165px;
     overflow: auto;
-    font: 12px Consolas, monospace;
-    line-height: 1.7;
-    color: #b1c9dc;
+    color: #bad0e0;
+    font: 12px/1.7 Consolas, monospace;
 }
+
+body.real .sim-only { display: none !important; }
+body.sim .real-only { display: none !important; }
 
 @media(max-width: 950px) {
     .columns { grid-template-columns: 1fr; }
 }
 
 @media(max-width: 570px) {
-    .xy, .feedback { grid-template-columns: 1fr 1fr; }
-    .fields { grid-template-columns: 1fr 1fr; }
-    .joint { grid-template-columns: 1fr 1fr; }
-    .metrics { grid-template-columns: 1fr 1fr; }
-    .wrap { padding: 12px; }
+    main { padding: 12px; }
+    .views, .feedback, .metrics, .fields {
+        grid-template-columns: 1fr 1fr;
+    }
+    .servo-fields { grid-template-columns: 1fr 1fr; }
 }
 </style>
 </head>
 
-<body>
+<body class="sim">
+<main>
 
-<div class="wrap">
+<header>
+    <div>
+        <div class="brand">
+            ROBOT LAMP / MOTION CONTROL
+        </div>
+        <h1>FK & IK Dashboard</h1>
+        <small>
+            ESP32 • SCS15 Servo 1–4 • Direct Target Ticks
+        </small>
+    </div>
+    <div class="badge" id="connection">
+        Checking ESP32...
+    </div>
+</header>
 
-    <div class="top">
-        <div>
-            <div class="brand">ROBOT LAMP / MOTION CONTROL</div>
-            <h1>FK & IK Dashboard</h1>
-            <small>SCS15 • Servo ID 1–4 • ESP32 • XYZ & Velocity</small>
+<div class="toolbar">
+    <button id="sim-mode" class="active">
+        SIMULATION
+    </button>
+    <button id="real-mode">REAL ESP32</button>
+    <button id="refresh">Refresh Servo</button>
+    <span class="muted" id="activity">Ready</span>
+</div>
+
+<div class="notice">
+    REAL: กรอก Target ticks ของ Servo ที่ต้องการ
+    แล้วกด MOVE (หรือ Enter) เพื่อสั่งจริงทันที
+    • ไม่มี Jog step หรือช่องติ๊กยืนยัน
+    • ระบบยังตรวจ Min/Max และตำแหน่งจริงระหว่างเคลื่อนที่
+    • CANCEL หยุดส่งคำสั่งถัดไป ไม่ใช่ Emergency Stop
+</div>
+
+<div class="columns">
+
+<section>
+    <div class="card">
+        <h2>End Effector Position</h2>
+
+        <div class="metrics">
+            <div class="metric">
+                <small>X (mm)</small>
+                <strong id="actual-x">—</strong>
+            </div>
+            <div class="metric">
+                <small>Y (mm)</small>
+                <strong id="actual-y">—</strong>
+            </div>
+            <div class="metric">
+                <small>Z (mm)</small>
+                <strong id="actual-z">—</strong>
+            </div>
         </div>
 
-        <div class="badge" id="connection">
-            Checking ESP32…
+        <p class="muted" id="position-source">
+            SIMULATION • model estimate
+        </p>
+    </div>
+
+    <div class="card">
+        <h2>Robot Arm Visualization</h2>
+
+        <div class="views">
+            <div>
+                <small>SIDE VIEW (R/Z)</small>
+                <canvas id="side"></canvas>
+            </div>
+
+            <div>
+                <small>TOP VIEW (X/Y)</small>
+                <canvas id="top-view"></canvas>
+            </div>
         </div>
     </div>
 
-    <div class="nav">
-        <button id="sim-mode" class="active">SIMULATION</button>
-        <button id="real-mode">REAL ESP32</button>
-        <button id="refresh">Refresh Servo</button>
-        <span class="muted" id="activity">Ready</span>
+    <div class="card">
+        <h2>Actual Servo Feedback</h2>
+        <div id="feedback" class="feedback"></div>
     </div>
 
-    <div class="notice">
-        ตำแหน่ง XYZ จริงเป็นค่าคำนวณจาก Servo feedback
-        ไม่ใช่การวัดด้วยเซนเซอร์ XYZ โดยตรง
-        ก่อน REAL MOVE ต้องวัดแขนและสอบเทียบแกนให้ถูกต้อง
-        CANCEL ไม่ใช่ Emergency Stop
+    <div class="card">
+        <h2>System Log</h2>
+        <pre id="log"></pre>
     </div>
+</section>
 
-    <div class="columns">
+<section>
+    <div class="card">
 
-        <div>
-
-            <div class="card">
-                <h2>End Effector Position</h2>
-
-                <div class="metrics">
-                    <div class="metric">
-                        <small>X (mm)</small>
-                        <strong id="actual-x">—</strong>
-                    </div>
-
-                    <div class="metric">
-                        <small>Y (mm)</small>
-                        <strong id="actual-y">—</strong>
-                    </div>
-
-                    <div class="metric">
-                        <small>Z (mm)</small>
-                        <strong id="actual-z">—</strong>
-                    </div>
-                </div>
-
-                <p class="muted"
-                   id="position-source"
-                   style="margin:13px 0 0">
-                    SIMULATION • FK computed
-                </p>
-            </div>
-
-            <div class="card">
-                <h2>Robot Arm Visualization</h2>
-
-                <div class="xy">
-                    <div class="canvasbox">
-                        <b>SIDE VIEW — Radius / Z</b>
-                        <canvas id="side"></canvas>
-                    </div>
-
-                    <div class="canvasbox">
-                        <b>TOP VIEW — X / Y</b>
-                        <canvas id="top-view"></canvas>
-                    </div>
-                </div>
-            </div>
-
-            <div class="card">
-                <h2>Servo Feedback</h2>
-                <div id="feedback" class="feedback"></div>
-            </div>
-
-            <div class="card">
-                <h2>System Log</h2>
-                <pre id="log"></pre>
-            </div>
-
+        <div class="tabs">
+            <button class="active" id="tab-fk">
+                Forward (FK)
+            </button>
+            <button id="tab-ik">Inverse (IK)</button>
+            <button id="tab-setup">Setup / Zero</button>
         </div>
 
-        <div>
+        <div class="panel show" id="panel-fk">
+            <h2>Forward Kinematics — Servo Control</h2>
 
-            <div class="card">
+            <p class="muted real-only">
+                REAL: กรอก Target ticks ของแต่ละ Servo
+                แล้วกด MOVE เพื่อหมุนไปยังค่าเป้าหมาย
+            </p>
 
-                <div class="nav">
-                    <button id="tab-ik" class="active">Inverse (IK)</button>
-                    <button id="tab-fk">Forward (FK)</button>
-                    <button id="tab-setup">Setup / Zero</button>
-                </div>
+            <p class="muted sim-only">
+                SIM: ปรับมุม Servo และ Velocity
+                แล้วกด MOVE เพื่อจำลอง
+            </p>
 
-                <section class="panel show" id="panel-ik">
+            <div id="servo-rows"></div>
 
-                    <h2>Inverse Kinematics — Move by XYZ</h2>
-
-                    <p class="muted">
-                        ใส่ตำแหน่งปลายแขนที่ต้องการ
-                        แล้วคำนวณมุม Servo 1–4
-                    </p>
-
-                    <div class="fields">
-
-                        <label class="field">
-                            <span>Target X (mm)</span>
-                            <input type="number" id="ik-x" step="1">
-                        </label>
-
-                        <label class="field">
-                            <span>Target Y (mm)</span>
-                            <input type="number" id="ik-y" step="1">
-                        </label>
-
-                        <label class="field">
-                            <span>Target Z (mm)</span>
-                            <input type="number" id="ik-z" step="1">
-                        </label>
-
-                        <label class="field">
-                            <span>End pitch (°)</span>
-                            <input type="number" id="ik-pitch" value="0">
-                        </label>
-
-                        <label class="field">
-                            <span>Velocity (mm/s)</span>
-                            <input type="number" id="ik-speed"
-                                   min="1" max="50" value="20">
-                        </label>
-
-                        <label class="field">
-                            <span>Elbow</span>
-                            <select id="ik-elbow">
-                                <option value="down">Elbow down</option>
-                                <option value="up">Elbow up</option>
-                            </select>
-                        </label>
-
-                    </div>
-
-                    <div class="actions">
-                        <button id="ik-preview" class="blue">Preview IK</button>
-                        <button id="ik-move" class="primary">MOVE TO XYZ</button>
-                        <button id="ik-home" class="sub">GO SETZERO</button>
-                        <button id="ik-cancel" class="red">CANCEL NEXT STEPS</button>
-                    </div>
-
-                    <p id="ik-result" class="muted"
-                       style="margin-top:14px">
-                        Enter XYZ to preview.
-                    </p>
-
-                </section>
-
-                <section class="panel" id="panel-fk">
-
-                    <h2>Forward Kinematics — Control Each Servo</h2>
-
-                    <p class="muted">
-                        ใส่มุมเป้าหมายและ Velocity (°/s)
-                        หรือกด ± เพื่อขยับทีละ 5°
-                    </p>
-
-                    <div id="joint-rows"></div>
-
-                    <div class="actions">
-                        <button id="fk-preview" class="blue">Preview FK</button>
-                        <button id="fk-move" class="primary">MOVE ALL</button>
-                        <button id="fk-home" class="sub">GO SETZERO</button>
-                        <button id="fk-cancel" class="red">CANCEL NEXT STEPS</button>
-                    </div>
-
-                    <p id="fk-result" class="muted"
-                       style="margin-top:14px">
-                        FK preview uses target angles.
-                    </p>
-
-                </section>
-
-                <section class="panel" id="panel-setup">
-
-                    <h2>Geometry / Calibration</h2>
-
-                    <p class="notice">
-                        ค่าความยาวเริ่มต้นเป็น DEMO เท่านั้น
-                        วัด L1, L2, L3, H จริงก่อนเคลื่อนที่ด้วย IK
-                    </p>
-
-                    <div class="fields">
-
-                        <label class="field">
-                            <span>Base height H (mm)</span>
-                            <input id="g-h" type="number" min="0">
-                        </label>
-
-                        <label class="field">
-                            <span>Link L1 (mm)</span>
-                            <input id="g-l1" type="number" min="1">
-                        </label>
-
-                        <label class="field">
-                            <span>Link L2 (mm)</span>
-                            <input id="g-l2" type="number" min="1">
-                        </label>
-
-                        <label class="field">
-                            <span>Tool link L3 (mm)</span>
-                            <input id="g-l3" type="number" min="0">
-                        </label>
-
-                    </div>
-
-                    <p class="muted" style="margin-top:14px">
-                        ทิศทางมุมเพิ่มของ Servo เทียบกับการเพิ่ม ticks (+ หรือ −)
-                    </p>
-
-                    <div class="fields" id="directions"></div>
-
-                    <div class="actions">
-                        <button id="save-geometry">SAVE GEOMETRY</button>
-                        <button id="set-zero-all" class="blue">
-                            SETZERO ALL (NO MOVE)
-                        </button>
-                    </div>
-
-                    <p style="margin-top:16px">
-                        <label>
-                            <input id="verified" type="checkbox">
-                            ยืนยันว่าตรวจขนาดแขน แกน Zero
-                            และขอบเขตการชนจริงแล้ว
-                        </label>
-                    </p>
-
-                    <p class="muted">
-                        ต้องยืนยันใหม่หลังแก้ Setup หรือ SETZERO
-                    </p>
-
-                    <p class="muted" id="setup-result"></p>
-
-                </section>
-
+            <div class="actions sim-only">
+                <button id="fk-preview">Preview FK</button>
+                <button class="primary" id="fk-move">
+                    MOVE ALL (SIM)
+                </button>
+                <button id="fk-home">
+                    GO SETZERO (SIM)
+                </button>
+                <button class="danger" id="sim-cancel">
+                    CANCEL (SIM)
+                </button>
             </div>
 
-            <div class="card">
-                <h2>Velocity & Safety</h2>
-
-                <p class="muted">
-                    Simulation ใช้ความเร็วที่ตั้งเพื่อจำลองเวลาเคลื่อนที่
-                    ส่วน REAL ยังใช้ความเร็วคงที่ใน Firmware
-                    (SCS15 MOVE_SPEED = 80)
-                    ช่อง Velocity ใช้หน่วงจังหวะส่ง Waypoint เท่านั้น
-                    ไม่ใช่การควบคุมความเร็ว Servo จริง
-                    และไม่ใช่การขยับ Servo ทุกตัวพร้อมกัน
-                </p>
+            <div class="actions real-only">
+                <button id="cancel-real" class="danger">
+                    CANCEL NEXT STEPS
+                </button>
             </div>
 
+            <p class="msg muted" id="fk-result"></p>
         </div>
 
+        <div class="panel" id="panel-ik">
+            <h2>Inverse Kinematics — X / Y / Z</h2>
+
+            <p class="muted">
+                IK ทำงานใน Simulation
+                REAL XYZ ต้องวัดความยาวแขน
+                และสอบเทียบแกนก่อน
+            </p>
+
+            <div class="fields">
+                <label class="field">
+                    <span>Target X (mm)</span>
+                    <input type="number" id="ik-x">
+                </label>
+
+                <label class="field">
+                    <span>Target Y (mm)</span>
+                    <input type="number" id="ik-y">
+                </label>
+
+                <label class="field">
+                    <span>Target Z (mm)</span>
+                    <input type="number" id="ik-z">
+                </label>
+
+                <label class="field">
+                    <span>End pitch (°)</span>
+                    <input type="number" id="ik-pitch" value="0">
+                </label>
+
+                <label class="field">
+                    <span>Velocity (mm/s, SIM)</span>
+                    <input type="number" id="ik-speed"
+                           value="20" min="1" max="50">
+                </label>
+
+                <label class="field">
+                    <span>Elbow</span>
+                    <select id="ik-elbow">
+                        <option value="down">Elbow down</option>
+                        <option value="up">Elbow up</option>
+                    </select>
+                </label>
+            </div>
+
+            <div class="actions">
+                <button id="ik-preview">Preview IK</button>
+                <button class="primary sim-only" id="ik-move">
+                    MOVE TO XYZ (SIM)
+                </button>
+                <button class="sim-only" id="ik-home">
+                    GO SETZERO (SIM)
+                </button>
+            </div>
+
+            <p class="msg muted" id="ik-result"></p>
+        </div>
+
+        <div class="panel" id="panel-setup">
+            <h2>Geometry / Software Zero</h2>
+
+            <p class="notice">
+                ขนาด H / L1 / L2 / L3
+                เริ่มต้นเป็นค่าตัวอย่าง ไม่ใช่ขนาดแขนจริง
+                • SETZERO บันทึกตำแหน่งปัจจุบัน
+                ไม่สั่ง Servo หมุน
+            </p>
+
+            <div class="fields">
+                <label class="field">
+                    <span>Base H (mm)</span>
+                    <input id="g-h" type="number" min="0">
+                </label>
+
+                <label class="field">
+                    <span>Link L1 (mm)</span>
+                    <input id="g-l1" type="number" min="1">
+                </label>
+
+                <label class="field">
+                    <span>Link L2 (mm)</span>
+                    <input id="g-l2" type="number" min="1">
+                </label>
+
+                <label class="field">
+                    <span>Tool L3 (mm)</span>
+                    <input id="g-l3" type="number" min="0">
+                </label>
+            </div>
+
+            <p class="muted">
+                ทิศทางมุมเพิ่มเทียบกับ ticks (+1 / −1)
+            </p>
+
+            <div class="fields" id="directions"></div>
+
+            <div class="actions">
+                <button id="save-geometry">
+                    SAVE GEOMETRY
+                </button>
+                <button id="zero-all">
+                    SETZERO ALL (NO MOVE)
+                </button>
+            </div>
+
+            <p id="setup-result" class="msg muted"></p>
+        </div>
     </div>
+
+    <div class="card">
+        <h2>Velocity / Diagnostics</h2>
+
+        <p class="muted">
+            REAL: ความเร็วยังคงกำหนดโดยเฟิร์มแวร์ ESP32
+            (MOVE_SPEED = 80)
+            ช่อง Velocity ใน FK/IK ใช้กับ Simulation เท่านั้น
+        </p>
+
+        <a href="/api/diagnostics" target="_blank"
+           style="color:var(--mint)">
+            ESP32 Diagnostics
+        </a>
+    </div>
+</section>
 
 </div>
+</main>
 
 <script>
 "use strict";
 
-// =======================================
-// 1. GLOBAL SETTINGS
-// =======================================
+// =====================================
+// GLOBAL DATA
+// =====================================
 
 const $ = id => document.getElementById(id);
+
 const IDS = [1, 2, 3, 4];
-
 const DEG = Math.PI / 180;
-const TICKS_PER_DEG = 1023 / 300;
+const TPD = 1023 / 300;
 
-const DEMO = {
+const clamp = (x, lo, hi) =>
+    Math.min(hi, Math.max(lo, x));
+
+const fmt = (x, n = 1) =>
+    Number.isFinite(x) ? x.toFixed(n) : "—";
+
+const sleep = ms =>
+    new Promise(r => setTimeout(r, ms));
+
+const DEFAULT = {
     h: 70,
     l1: 110,
     l2: 105,
@@ -574,69 +543,70 @@ const DEMO = {
 };
 
 let geom = {
-    ...DEMO,
-    dirs: [...DEMO.dirs]
+    ...DEFAULT,
+    dirs: [...DEFAULT.dirs]
 };
 
-let source = "sim";
-let actual = [0, 30, -60, 30];
+let mode = "sim";
+
+let simQ = [0, 30, -60, 30];
 let simZero = [0, 0, 0, 0];
 
 let live = {
     connected: false,
     info_ready: false,
+    busy: false,
     servos: []
 };
 
-let verified = false;
-let moving = false;
-let cancelled = false;
-
-const clamp = (v, a, b) =>
-    Math.min(b, Math.max(a, v));
-
-const val = id => Number($(id).value);
-
-const fmt = (x, n = 1) =>
-    Number.isFinite(x) ? x.toFixed(n) : "—";
-
-const sleep = ms =>
-    new Promise(resolve => setTimeout(resolve, ms));
+let working = false;
+let simCancelled = false;
 
 
-// =======================================
-// 2. LOG / STATUS
-// =======================================
+// =====================================
+// GENERAL FUNCTIONS
+// =====================================
 
 function log(s) {
-    const el = $("log");
-
-    el.textContent =
-        `${new Date().toLocaleTimeString()}  ${s}\n`
-        + el.textContent.slice(0, 2800);
+    $("log").textContent =
+        `${new Date().toLocaleTimeString()} ${s}\n`
+        + $("log").textContent.slice(0, 2600);
 }
 
-function message(id, text, bad = false) {
-    const el = $(id);
-    el.textContent = text;
-    el.className = bad ? "error" : "ok";
+function message(id, s, bad = false) {
+    $(id).textContent = s;
+
+    $(id).className =
+        "msg " + (bad ? "error" : "ok");
 }
 
-function busy(on) {
-    moving = on;
+function number(id) {
+    const s = $(id).value.trim();
+    const n = Number(s);
 
-    $("activity").textContent = on
-        ? "MOVING (do not disconnect)"
-        : "Ready";
+    if (!s || !Number.isFinite(n)) {
+        throw Error(`Invalid: ${id}`);
+    }
+
+    return n;
+}
+
+function servo(id) {
+    return (live.servos || []).find(
+        s => s.id === id
+    );
 }
 
 
-// =======================================
-// 3. FORWARD KINEMATICS
-// =======================================
+// =====================================
+// FORWARD KINEMATICS
+// =====================================
 
 function fk(q) {
-    const [a, b, c, d] = q.map(x => x * DEG);
+    const [a, b, c, d] = q.map(
+        x => x * DEG
+    );
+
     const t = b + c + d;
 
     const r =
@@ -644,53 +614,66 @@ function fk(q) {
         + geom.l2 * Math.cos(b + c)
         + geom.l3 * Math.cos(t);
 
-    const x = r * Math.cos(a);
-    const y = r * Math.sin(a);
-
-    const z =
-        geom.h
-        + geom.l1 * Math.sin(b)
-        + geom.l2 * Math.sin(b + c)
-        + geom.l3 * Math.sin(t);
-
     return {
-        x: x,
-        y: y,
-        z: z,
+        x: r * Math.cos(a),
+        y: r * Math.sin(a),
+        z: geom.h
+           + geom.l1 * Math.sin(b)
+           + geom.l2 * Math.sin(b + c)
+           + geom.l3 * Math.sin(t),
         pitch: t / DEG
     };
 }
 
+function checkQ(q) {
+    if (
+        q.length !== 4
+        || q.some(x => !Number.isFinite(x))
+    ) {
+        throw Error("Invalid joint angles");
+    }
 
-// =======================================
-// 4. INVERSE KINEMATICS
-// =======================================
+    const limits = [150, 100, 140, 140];
+
+    q.forEach((x, i) => {
+        if (Math.abs(x) > limits[i]) {
+            throw Error(
+                `Servo ${i + 1} exceeds demo angle range`
+            );
+        }
+    });
+}
+
+
+// =====================================
+// INVERSE KINEMATICS
+// =====================================
 
 function ik(p, pitch, elbow) {
     const a = Math.atan2(p.y, p.x);
-
     const r = Math.hypot(p.x, p.y);
     const t = pitch * DEG;
 
     const x = r - geom.l3 * Math.cos(t);
-    const z = p.z - geom.h - geom.l3 * Math.sin(t);
 
-    let C =
-        (x * x + z * z - geom.l1 ** 2 - geom.l2 ** 2)
+    const z =
+        p.z - geom.h
+        - geom.l3 * Math.sin(t);
+
+    let c =
+        (x*x + z*z - geom.l1**2 - geom.l2**2)
         / (2 * geom.l1 * geom.l2);
 
     if (
-        !Number.isFinite(C)
-        || Math.abs(C) > 1 + 1e-7
+        !Number.isFinite(c)
+        || Math.abs(c) > 1 + 1e-7
     ) {
-        throw Error("XYZ อยู่นอกระยะที่แขนเอื้อมถึง");
+        throw Error("XYZ unreachable");
     }
 
-    C = clamp(C, -1, 1);
-
-    const c =
-        (elbow === "up" ? 1 : -1)
-        * Math.acos(C);
+    c = (
+        elbow === "up" ? 1 : -1
+    ) * Math.acos(clamp(c, -1, 1));
 
     const b =
         Math.atan2(z, x)
@@ -706,45 +689,21 @@ function ik(p, pitch, elbow) {
         (t - b - c) / DEG
     ];
 
-    checkAngles(q);
+    checkQ(q);
+
     return q;
 }
 
 
-// =======================================
-// 5. JOINT LIMITS
-// =======================================
+// =====================================
+// REAL JOINT ANGLES
+// =====================================
 
-function checkAngles(q) {
-    if (q.some(v => !Number.isFinite(v))) {
-        throw Error("มุม Servo ไม่ถูกต้อง");
-    }
-
-    const limits = [150, 100, 140, 140];
-
-    q.forEach((v, i) => {
-        if (Math.abs(v) > limits[i]) {
-            throw Error(
-                `Servo ${i + 1}: มุม ${fmt(v)}° `
-                + `เกินขอบเขต DEMO ±${limits[i]}°`
-            );
-        }
-    });
-}
-
-
-// =======================================
-// 6. ACTUAL SERVO FEEDBACK
-// =======================================
-
-function servo(id) {
-    return (live.servos || []).find(
-        s => s.id === id
-    );
-}
-
-function realAngles() {
-    if (!live.connected || !live.info_ready) {
+function realQ() {
+    if (
+        !live.connected
+        || !live.info_ready
+    ) {
         return null;
     }
 
@@ -753,294 +712,135 @@ function realAngles() {
 
         return (
             s
+            && s.online
             && Number.isInteger(s.actual)
             && Number.isInteger(s.zero)
         )
             ? (s.actual - s.zero)
-              * geom.dirs[i] / TICKS_PER_DEG
+              * geom.dirs[i] / TPD
             : NaN;
     });
 
-    return q.every(Number.isFinite) ? q : null;
+    return q.every(Number.isFinite)
+        ? q
+        : null;
 }
 
-function tickFromAngle(id, angle) {
-    const s = servo(id);
+function currentQ() {
+    return mode === "sim"
+        ? [...simQ]
+        : realQ();
+}
 
-    if (!s || !Number.isInteger(s.zero)) {
-        throw Error(`Servo ${id}: ต้อง SETZERO ก่อน`);
+function syncSimFields() {
+    simQ.forEach((v, i) => {
+        $("joint-" + (i + 1)).value = fmt(v);
+    });
+
+    const p = fk(simQ);
+
+    for (const k of ["x", "y", "z"]) {
+        $("ik-" + k).value = fmt(p[k]);
     }
 
-    return Math.round(
-        s.zero
-        + angle * geom.dirs[id - 1] * TICKS_PER_DEG
-    );
-}
-
-function currentAngles() {
-    return source === "sim"
-        ? [...actual]
-        : realAngles();
-}
-
-
-// =======================================
-// 7. UI FIELDS
-// =======================================
-
-function setIKFields(q) {
-    const p = fk(q);
-
-    $("ik-x").value = fmt(p.x);
-    $("ik-y").value = fmt(p.y);
-    $("ik-z").value = fmt(p.z);
     $("ik-pitch").value = fmt(p.pitch);
 }
 
-function setJointFields(q) {
-    q.forEach((v, i) => {
-        $("joint-" + (i + 1)).value = fmt(v);
-    });
-}
 
-function jointFields() {
-    const q = IDS.map(id => val("joint-" + id));
-    checkAngles(q);
-    return q;
-}
+// =====================================
+// ROBOT VISUALIZATION
+// =====================================
 
-function velocities() {
-    const v = IDS.map(id => val("vel-" + id));
+function draw(q) {
+    for (const id of ["side", "top-view"]) {
+        const canvas = $(id);
+        const rect = canvas.getBoundingClientRect();
 
-    if (
-        v.some(x =>
-            !Number.isFinite(x)
-            || x < 1
-            || x > 60
-        )
-    ) {
-        throw Error("Velocity ต้องอยู่ในช่วง 1–60 °/s");
-    }
+        const dpr = window.devicePixelRatio || 1;
+        const w = Math.max(100, rect.width);
+        const h = 210;
 
-    return v;
-}
+        canvas.width = w * dpr;
+        canvas.height = h * dpr;
 
-function showTab(name) {
-    for (const id of ["ik", "fk", "setup"]) {
-        $("tab-" + id).classList.toggle(
-            "active",
-            name === id
-        );
+        const ctx = canvas.getContext("2d");
 
-        $("panel-" + id).classList.toggle(
-            "show",
-            name === id
-        );
-    }
-}
-
-function sourceMode(mode) {
-    if (moving) return;
-
-    source = mode;
-    verified = false;
-    $("verified").checked = false;
-
-    $("sim-mode").classList.toggle(
-        "active",
-        mode === "sim"
-    );
-
-    $("real-mode").classList.toggle(
-        "active",
-        mode === "real"
-    );
-
-    const q = currentAngles();
-
-    if (q) {
-        setIKFields(q);
-        setJointFields(q);
-    }
-
-    render();
-    log("Mode: " + mode.toUpperCase());
-}
-
-
-// =======================================
-// 8. FK / IK PREVIEW
-// =======================================
-
-function previewFK() {
-    try {
-        const q = jointFields();
-        const p = fk(q);
-
-        message(
-            "fk-result",
-            `Target XYZ = ${fmt(p.x)}, `
-            + `${fmt(p.y)}, ${fmt(p.z)} mm `
-            + `| pitch ${fmt(p.pitch)}°`
-        );
-
-        drawArm(q);
-        return q;
-
-    } catch (e) {
-        message("fk-result", e.message, true);
-        return null;
-    }
-}
-
-function ikTarget() {
-    const p = {
-        x: val("ik-x"),
-        y: val("ik-y"),
-        z: val("ik-z")
-    };
-
-    const pitch = val("ik-pitch");
-    const speed = val("ik-speed");
-
-    if (
-        [...Object.values(p), pitch, speed]
-        .some(x => !Number.isFinite(x))
-    ) {
-        throw Error("กรุณากรอก XYZ / Pitch / Velocity");
-    }
-
-    if (speed < 1 || speed > 50) {
-        throw Error(
-            "IK Velocity ต้องอยู่ในช่วง 1–50 mm/s"
-        );
-    }
-
-    return {
-        p,
-        pitch,
-        speed,
-        elbow: $("ik-elbow").value,
-        q: ik(
-            p,
-            pitch,
-            $("ik-elbow").value
-        )
-    };
-}
-
-function previewIK() {
-    try {
-        const t = ikTarget();
-
-        message(
-            "ik-result",
-            `IK result: `
-            + `J1=${fmt(t.q[0])}°  `
-            + `J2=${fmt(t.q[1])}°  `
-            + `J3=${fmt(t.q[2])}°  `
-            + `J4=${fmt(t.q[3])}°`
-        );
-
-        drawArm(t.q);
-        return t;
-
-    } catch (e) {
-        message("ik-result", e.message, true);
-        return null;
-    }
-}
-
-
-// =======================================
-// 9. ROBOT ARM VISUALIZATION
-// =======================================
-
-function drawArm(q) {
-    for (const canvasId of ["side", "top-view"]) {
-        const el = $(canvasId);
-        const box = el.getBoundingClientRect();
-        const scale = window.devicePixelRatio || 1;
-
-        el.width = Math.round(box.width * scale);
-        el.height = Math.round(box.height * scale);
-
-        const ctx = el.getContext("2d");
-        ctx.scale(scale, scale);
-
-        const w = box.width;
-        const h = box.height;
-
+        ctx.scale(dpr, dpr);
         ctx.fillStyle = "#081b2e";
         ctx.fillRect(0, 0, w, h);
 
-        ctx.strokeStyle = "#17354d";
+        ctx.strokeStyle = "#1a364f";
         ctx.lineWidth = 1;
 
-        for (let n = 0; n < w; n += 25) {
+        for (let x = 0; x < w; x += 25) {
             ctx.beginPath();
-            ctx.moveTo(n, 0);
-            ctx.lineTo(n, h);
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, h);
             ctx.stroke();
         }
 
-        for (let n = 0; n < h; n += 25) {
+        for (let y = 0; y < h; y += 25) {
             ctx.beginPath();
-            ctx.moveTo(0, n);
-            ctx.lineTo(w, n);
+            ctx.moveTo(0, y);
+            ctx.lineTo(w, y);
             ctx.stroke();
         }
 
         if (!q) {
-            ctx.fillStyle = "#adc5da";
+            ctx.fillStyle = "#b5ccdd";
+
             ctx.fillText(
-                "No calibrated XYZ available",
-                15,
+                "Real XYZ not calibrated",
+                12,
                 h / 2
             );
+
             continue;
         }
 
-        const [a, b, c, d] = q.map(v => v * DEG);
+        const [a, b, c, d] = q.map(
+            v => v * DEG
+        );
+
         let nodes;
 
-        if (canvasId === "side") {
-            const p0 = [0, geom.h];
+        if (id === "side") {
+            const r1 = geom.l1 * Math.cos(b);
+            const z1 =
+                geom.h + geom.l1 * Math.sin(b);
 
-            const p1 = [
-                geom.l1 * Math.cos(b),
-                geom.h + geom.l1 * Math.sin(b)
-            ];
+            const r2 =
+                r1 + geom.l2 * Math.cos(b + c);
 
-            const p2 = [
-                p1[0] + geom.l2 * Math.cos(b + c),
-                p1[1] + geom.l2 * Math.sin(b + c)
-            ];
+            const z2 =
+                z1 + geom.l2 * Math.sin(b + c);
 
-            const p3 = [
-                p2[0] + geom.l3 * Math.cos(b + c + d),
-                p2[1] + geom.l3 * Math.sin(b + c + d)
-            ];
+            const r3 =
+                r2 + geom.l3 * Math.cos(b + c + d);
+
+            const z3 =
+                z2 + geom.l3 * Math.sin(b + c + d);
 
             const S = Math.min(
-                w * .52 / (
-                    geom.l1 + geom.l2 + geom.l3
-                ),
-                h * .63 / (
-                    geom.h + geom.l1
-                    + geom.l2 + geom.l3
-                )
+                w * .55 /
+                (geom.l1 + geom.l2 + geom.l3),
+                h * .65 /
+                (geom.h + geom.l1
+                 + geom.l2 + geom.l3)
             );
 
-            nodes = [p0, p1, p2, p3].map(
-                ([r, z]) => [
-                    w * .22 + r * S,
-                    h * .84 - z * S
-                ]
-            );
+            nodes = [
+                [0, geom.h],
+                [r1, z1],
+                [r2, z2],
+                [r3, z3]
+            ].map(([r, z]) => [
+                w * .2 + r * S,
+                h * .83 - z * S
+            ]);
 
         } else {
-            const rad = [
+            const rs = [
                 0,
                 geom.l1 * Math.cos(b),
                 geom.l1 * Math.cos(b)
@@ -1051,42 +851,44 @@ function drawArm(q) {
             ];
 
             const S =
-                Math.min(w * .35, h * .35)
+                Math.min(w, h) * .32
                 / (geom.l1 + geom.l2 + geom.l3);
 
-            nodes = rad.map(r => [
+            nodes = rs.map(r => [
                 w / 2 + r * Math.cos(a) * S,
                 h / 2 - r * Math.sin(a) * S
             ]);
         }
 
-        ctx.strokeStyle = canvasId === "side"
-            ? "#70e7c4"
+        ctx.strokeStyle = id === "side"
+            ? "#76e7c4"
             : "#88baff";
 
         ctx.lineWidth = 5;
         ctx.lineCap = "round";
-        ctx.lineJoin = "round";
+
         ctx.beginPath();
 
-        nodes.forEach((p, i) =>
-            i ? ctx.lineTo(...p) : ctx.moveTo(...p)
-        );
+        nodes.forEach((p, i) => {
+            if (i) ctx.lineTo(...p);
+            else ctx.moveTo(...p);
+        });
 
         ctx.stroke();
 
         nodes.forEach((p, i) => {
             ctx.beginPath();
+
             ctx.arc(
                 ...p,
                 i === 3 ? 6 : 5,
                 0,
-                Math.PI * 2
+                2 * Math.PI
             );
 
             ctx.fillStyle = i === 3
-                ? "#ffd39a"
-                : "#eef6ff";
+                ? "#ffd6a5"
+                : "#f0f6ff";
 
             ctx.fill();
         });
@@ -1094,68 +896,173 @@ function drawArm(q) {
 }
 
 
-// =======================================
-// 10. UPDATE DASHBOARD
-// =======================================
+// =====================================
+// ENABLE / DISABLE BUTTONS
+// =====================================
+
+function buttons() {
+    const ready = (
+        mode === "real"
+        && live.connected
+        && live.info_ready
+        && !live.busy
+        && !working
+    );
+
+    for (const id of IDS) {
+        const s = servo(id);
+
+        const ok = !!(
+            s
+            && s.online
+            && Number.isInteger(s.actual)
+            && Number.isInteger(s.min)
+            && Number.isInteger(s.max)
+        );
+
+        $("move-" + id).disabled =
+            !(ready && ok);
+
+        $("minus-" + id).disabled =
+            !(
+                ready && ok
+                && s.actual - 1 >= s.min + 20
+            );
+
+        $("plus-" + id).disabled =
+            !(
+                ready && ok
+                && s.actual + 1 <= s.max - 20
+            );
+
+        $("zero-" + id).disabled =
+            mode === "sim"
+                ? working
+                : !(ready && ok);
+
+        $("home-" + id).disabled =
+            !(
+                ready && ok
+                && Number.isInteger(s.zero)
+            );
+
+        $("sim-move-" + id).disabled =
+            working || mode !== "sim";
+
+        $("velocity-" + id).disabled =
+            mode === "real";
+    }
+
+    $("fk-move").disabled =
+        working || mode !== "sim";
+
+    $("ik-move").disabled =
+        working || mode !== "sim";
+
+    $("zero-all").disabled =
+        working || live.busy
+        || (
+            mode === "real"
+            && !live.connected
+        );
+}
+
+
+// =====================================
+// UPDATE DASHBOARD
+// =====================================
 
 function render() {
-    const q = currentAngles();
-    const p = q ? fk(q) : null;
+    const q = currentQ();
 
-    for (const axis of ["x", "y", "z"]) {
-        $("actual-" + axis).textContent =
-            p ? fmt(p[axis]) : "—";
+    const p = (
+        mode === "sim" && q
+    ) ? fk(q) : null;
+
+    for (const k of ["x", "y", "z"]) {
+        $("actual-" + k).textContent =
+            p ? fmt(p[k]) : "—";
     }
 
     $("position-source").textContent =
-        source === "sim"
-        ? "SIMULATION • calculated from joint angles"
-        : q && verified
-            ? "REAL • estimated from actual Servo ticks + calibrated geometry"
-            : "REAL • needs online feedback, Software Zero and calibrated geometry";
+        mode === "sim"
+        ? "SIMULATION • calculated from demo model"
+        : "REAL • actual ticks available; XYZ requires measured geometry and calibration";
 
-    if (source === "real" && !verified) {
-        ["x", "y", "z"].forEach(a => {
-            $("actual-" + a).textContent = "—";
-        });
-    }
-
-    IDS.forEach(id => {
+    for (const id of IDS) {
         const s = servo(id);
 
-        const a = source === "sim"
-            ? actual[id - 1]
-            : q ? q[id - 1] : NaN;
+        const angle = q
+            ? q[id - 1]
+            : NaN;
 
         $("read-angle-" + id).textContent =
-            fmt(a) + "°";
+            fmt(angle) + "°";
 
         $("read-ticks-" + id).textContent =
-            source === "sim"
+            mode === "sim"
             ? "SIM"
             : s && s.online
                 ? `${s.actual} ticks`
                 : "OFFLINE";
-    });
 
-    drawArm(
-        source === "real" && !verified
-        ? null
-        : q
-    );
+        $("row-actual-" + id).textContent =
+            mode === "sim"
+            ? `SIM ${fmt(simQ[id - 1])}°`
+            : s && s.online
+                ? `${s.actual} ticks | Zero ${s.zero ?? "—"}`
+                : "NO FEEDBACK";
+
+        $("row-info-" + id).textContent =
+            mode === "sim"
+            ? "Simulation"
+            : s && s.online
+                ? `limits ${s.min}..${s.max} | ${s.voltage}V | ${s.temperature}°C`
+                : "Offline";
+
+        if (
+            mode === "real"
+            && s
+            && Number.isInteger(s.actual)
+            && $("target-" + id).dataset.seeded !== "yes"
+        ) {
+            $("target-" + id).value = s.actual;
+
+            $("target-" + id).dataset.seeded =
+                "yes";
+        }
+    }
+
+    draw(mode === "sim" ? q : null);
+
+    buttons();
+}
+
+function setWorking(v) {
+    working = v;
+
+    $("activity").textContent = v
+        ? "Working..."
+        : "Ready";
+
+    buttons();
 }
 
 
-// =======================================
-// 11. SERVER CONNECTION
-// =======================================
+// =====================================
+// ESP32 STATUS / HTTP API
+// =====================================
 
-async function poll() {
+async function getStatus() {
     try {
         const r = await fetch(
             "/api/status",
             {cache: "no-store"}
         );
+
+        if (!r.ok) {
+            throw Error("Server error");
+        }
 
         live = await r.json();
 
@@ -1166,530 +1073,244 @@ async function poll() {
 
         $("connection").style.color =
             live.connected
-            ? "#70e7c4"
-            : "#fa8292";
+            ? "#76e7c4"
+            : "#ff9da6";
 
     } catch (e) {
         live = {
             connected: false,
             info_ready: false,
+            busy: false,
             servos: []
         };
 
         $("connection").textContent =
             "SERVER OFFLINE";
+
+        $("connection").style.color =
+            "#ff9da6";
     }
 
     render();
 }
 
-async function refresh() {
-    const r = await fetch(
-        "/api/refresh",
-        {method: "POST"}
-    );
-
-    const d = await r.json();
-
-    if (!r.ok) {
-        throw Error(
-            d.error || "Refresh failed"
-        );
-    }
-
-    live = d;
-    render();
-}
-
-function ensureReal() {
-    if (!verified) {
-        throw Error(
-            "กรุณาสอบเทียบ Geometry และยืนยันใน Setup ก่อนสั่ง REAL"
-        );
-    }
-
-    if (!realAngles()) {
-        throw Error(
-            "ต้องเชื่อมต่อ ESP32 และ SETZERO ทั้ง 4 ตัวก่อน"
-        );
-    }
-}
-
-
-// =======================================
-// 12. REAL SERVO MOVE
-// =======================================
-
-async function sendMove(id, target) {
-    const r = await fetch(
-        `/api/servo/${id}/move`,
-        {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-                target: target,
-                confirm: true
-            })
-        }
-    );
+async function post(url, data = {}) {
+    const r = await fetch(url, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify(data)
+    });
 
     const d = await r.json();
 
     if (!r.ok || !d.ok) {
         throw Error(
-            `Servo ${id}: ${d.error || "MOVE rejected"}`
+            d.error || "Command failed"
+        );
+    }
+
+    return d;
+}
+
+async function refresh() {
+    live = await post("/api/refresh");
+    render();
+}
+
+
+// =====================================
+// CHANGE MODE / TAB
+// =====================================
+
+function changeMode(next) {
+    if (working) return;
+
+    mode = next;
+    document.body.className = next;
+
+    $("sim-mode").classList.toggle(
+        "active",
+        next === "sim"
+    );
+
+    $("real-mode").classList.toggle(
+        "active",
+        next === "real"
+    );
+
+    if (next === "real") {
+        IDS.forEach(id => {
+            $("target-" + id).dataset.seeded = "";
+        });
+    }
+
+    render();
+    log("Mode: " + next.toUpperCase());
+}
+
+function showTab(name) {
+    for (const t of ["fk", "ik", "setup"]) {
+        $("tab-" + t).classList.toggle(
+            "active",
+            t === name
+        );
+
+        $("panel-" + t).classList.toggle(
+            "show",
+            t === name
         );
     }
 }
 
-async function moveServoReal(id, targetDeg, velocity) {
-    const target = tickFromAngle(id, targetDeg);
-    const s = servo(id);
 
-    if (
-        !s
-        || !Number.isInteger(s.min)
-        || !Number.isInteger(s.max)
-        || target < s.min + 20
-        || target > s.max - 20
-    ) {
-        throw Error(
-            `Servo ${id}: target outside hardware Min/Max`
-        );
-    }
+// =====================================
+// REAL SERVO MOVE
+// =====================================
 
-    const startAt = Date.now();
-    let attempts = 0;
+async function moveReal(
+    id,
+    targetOverride = null
+) {
+    if (working || mode !== "real") return;
 
-    while (true) {
-        if (cancelled) {
+    try {
+        const target = targetOverride === null
+            ? number("target-" + id)
+            : targetOverride;
+
+        if (!Number.isInteger(target)) {
             throw Error(
-                "Cancelled: no further commands sent"
+                "Target ticks must be an integer"
             );
         }
 
+        const s = servo(id);
+
+        if (!s || !s.online) {
+            throw Error("Servo not connected");
+        }
+
         if (
-            ++attempts > 65
-            || Date.now() - startAt > 180000
+            target < s.min + 20
+            || target > s.max - 20
         ) {
             throw Error(
-                `Servo ${id}: movement timeout`
+                `Target must be ${s.min + 20}..${s.max - 20} ticks`
+            );
+        }
+
+        $("target-" + id).value = target;
+
+        setWorking(true);
+
+        message(
+            "fk-result",
+            `Moving Servo ${id} to ${target} ticks...`
+        );
+
+        log(
+            `MOVE Servo ${id} -> ${target} ticks`
+        );
+
+        const result = await post(
+            `/api/servo/${id}/move`,
+            {target}
+        );
+
+        message(
+            "fk-result",
+            `Servo ${id}: Target ${result.target}, Actual ${result.actual} ticks`
+        );
+
+        log(
+            `Servo ${id}: ${result.before} -> ${result.actual} (target ${target})`
+        );
+
+        await refresh();
+
+    } catch (e) {
+        message(
+            "fk-result",
+            e.message
+            + " — refresh actual before retrying",
+            true
+        );
+
+        log(
+            "MOVE ERROR: " + e.message
+        );
+
+        try {
+            await refresh();
+        } catch (_) {}
+
+    } finally {
+        setWorking(false);
+        render();
+    }
+}
+
+
+// =====================================
+// CANCEL FUTURE MOVEMENT STEPS
+// =====================================
+
+async function cancelReal() {
+    try {
+        const d = await post("/api/cancel");
+
+        log(d.message);
+
+    } catch (e) {
+        log(
+            "CANCEL error: " + e.message
+        );
+    }
+}
+
+
+// =====================================
+// SOFTWARE ZERO
+// =====================================
+
+async function setZero(ids) {
+    if (working) return;
+
+    if (mode === "sim") {
+        ids.forEach(id => {
+            simZero[id - 1] = simQ[id - 1];
+        });
+
+        message(
+            "setup-result",
+            "Simulation zero saved"
+        );
+
+        return;
+    }
+
+    setWorking(true);
+
+    try {
+        for (const id of ids) {
+            await post(
+                `/api/servo/${id}/zero`,
+                {confirm: true}
             );
         }
 
         await refresh();
 
-        const current = servo(id).actual;
-        const difference = target - current;
-
-        if (Math.abs(difference) <= 4) {
-            return;
-        }
-
-        const step =
-            Math.sign(difference)
-            * Math.min(20, Math.abs(difference));
-
-        const next = current + step;
-        const started = Date.now();
-
-        await sendMove(id, next);
-
-        let arrived = false;
-
-        for (let n = 0; n < 22; n++) {
-            if (cancelled) {
-                throw Error(
-                    "Cancelled: current hardware command may continue"
-                );
-            }
-
-            await sleep(450);
-            await refresh();
-
-            if (
-                Math.abs(
-                    servo(id).actual - next
-                ) <= 4
-            ) {
-                arrived = true;
-                break;
-            }
-        }
-
-        if (!arrived) {
-            throw Error(
-                `Servo ${id} did not reach ${next} ticks`
-            );
-        }
-
-        // Firmware servo speed remains fixed.
-        // This only controls software command pacing.
-        const milliseconds =
-            Math.abs(step / TICKS_PER_DEG / velocity)
-            * 1000;
-
-        if (
-            milliseconds > Date.now() - started
-        ) {
-            await sleep(
-                milliseconds - (Date.now() - started)
-            );
-        }
-    }
-}
-
-
-// =======================================
-// 13. FORWARD MOVE
-// =======================================
-
-async function moveFK(ids = IDS, target = null) {
-    if (moving) return;
-
-    try {
-        const q = target || jointFields();
-        const v = velocities();
-
-        checkAngles(q);
-
-        cancelled = false;
-        busy(true);
-
-        if (source === "sim") {
-            const start = [...actual];
-
-            const time = Math.max(
-                ...ids.map(id =>
-                    Math.abs(
-                        q[id - 1] - start[id - 1]
-                    ) / v[id - 1]
-                )
-            );
-
-            const duration = Math.max(
-                100,
-                time * 1000
-            );
-
-            const began = Date.now();
-
-            while (true) {
-                if (cancelled) {
-                    throw Error(
-                        "Simulation cancelled"
-                    );
-                }
-
-                const t = clamp(
-                    (Date.now() - began) / duration,
-                    0,
-                    1
-                );
-
-                for (const id of ids) {
-                    actual[id - 1] =
-                        start[id - 1]
-                        + (
-                            q[id - 1]
-                            - start[id - 1]
-                        ) * t;
-                }
-
-                render();
-
-                if (t >= 1) break;
-
-                await sleep(30);
-            }
-
-        } else {
-            ensureReal();
-
-            if (!confirm(
-                "REAL MOVE: Servo จะเคลื่อนทีละตัว ไม่พร้อมกัน\n"
-                + "Firmware SPEED=80\n"
-                + "Velocity เป็น software pacing\n"
-                + "ตรวจระยะชนและเตรียม E-STOP จริงก่อน\n"
-                + "ดำเนินการหรือไม่?"
-            )) {
-                return;
-            }
-
-            for (const id of ids) {
-                await moveServoReal(
-                    id,
-                    q[id - 1],
-                    v[id - 1]
-                );
-            }
-        }
-
-        log("FK move completed");
-
-        message(
-            "fk-result",
-            "FK movement completed"
-        );
-
-    } catch (e) {
-        log("FK ERROR: " + e.message);
-        message("fk-result", e.message, true);
-
-    } finally {
-        busy(false);
-        render();
-    }
-}
-
-
-// =======================================
-// 14. INVERSE MOVE
-// =======================================
-
-async function moveIK() {
-    if (moving) return;
-
-    const t = previewIK();
-    if (!t) return;
-
-    try {
-        cancelled = false;
-        busy(true);
-
-        const start = currentAngles();
-
-        if (!start) {
-            throw Error(
-                "No real joint feedback available"
-            );
-        }
-
-        if (source === "real") {
-            ensureReal();
-        }
-
-        const from = fk(start);
-
-        const distance = Math.hypot(
-            t.p.x - from.x,
-            t.p.y - from.y,
-            t.p.z - from.z
-        );
-
-        const segments = clamp(
-            Math.ceil(distance / 10),
-            1,
-            40
-        );
-
-        const points = [];
-
-        for (let k = 1; k <= segments; k++) {
-            const a = k / segments;
-
-            const p = {
-                x: from.x + (t.p.x - from.x) * a,
-                y: from.y + (t.p.y - from.y) * a,
-                z: from.z + (t.p.z - from.z) * a
-            };
-
-            points.push(
-                ik(
-                    p,
-                    from.pitch
-                        + (t.pitch - from.pitch) * a,
-                    t.elbow
-                )
-            );
-        }
-
-        if (
-            source === "real"
-            && !confirm(
-                "REAL IK: Servo จะเคลื่อนทีละตัวตาม Waypoints\n"
-                + "เส้นทางปลายแขนอาจไม่เป็นเส้นตรง\n"
-                + "เพราะ Firmware ไม่ควบคุมพร้อมกัน\n"
-                + "ตรวจพื้นที่และเตรียม E-STOP แล้วหรือไม่?"
-            )
-        ) {
-            return;
-        }
-
-        let previous = start;
-
-        for (const q of points) {
-            if (cancelled) {
-                throw Error("Cancelled");
-            }
-
-            if (source === "sim") {
-                const p1 = fk(q);
-                const p0 = fk(previous);
-
-                const d = Math.hypot(
-                    p1.x - p0.x,
-                    p1.y - p0.y,
-                    p1.z - p0.z
-                );
-
-                const duration = Math.max(
-                    30,
-                    1000 * d / t.speed
-                );
-
-                const begin = Date.now();
-
-                while (true) {
-                    if (cancelled) {
-                        throw Error("Cancelled");
-                    }
-
-                    const r = clamp(
-                        (Date.now() - begin) / duration,
-                        0,
-                        1
-                    );
-
-                    actual = previous.map(
-                        (x, i) =>
-                            x + (q[i] - x) * r
-                    );
-
-                    render();
-
-                    if (r >= 1) break;
-
-                    await sleep(30);
-                }
-
-            } else {
-                for (const id of IDS) {
-                    const v = clamp(
-                        Math.abs(
-                            q[id - 1]
-                            - previous[id - 1]
-                        ) * t.speed / 10,
-                        1,
-                        50
-                    );
-
-                    await moveServoReal(
-                        id,
-                        q[id - 1],
-                        v
-                    );
-                }
-            }
-
-            previous = q;
-        }
-
-        log("IK movement completed");
-
-        message(
-            "ik-result",
-            "IK MOVE completed; see Actual XYZ feedback"
-        );
-
-    } catch (e) {
-        log("IK ERROR: " + e.message);
-        message("ik-result", e.message, true);
-
-    } finally {
-        busy(false);
-        render();
-    }
-}
-
-
-// =======================================
-// 15. GO SETZERO / CANCEL
-// =======================================
-
-function goZero() {
-    if (moving) return;
-
-    const home = source === "sim"
-        ? [...simZero]
-        : [0, 0, 0, 0];
-
-    setJointFields(home);
-    moveFK(IDS, home);
-}
-
-function cancel() {
-    cancelled = true;
-
-    log(
-        "CANCEL: no new commands after current instruction. "
-        + "NOT an E-STOP."
-    );
-}
-
-
-// =======================================
-// 16. SETZERO
-// =======================================
-
-async function setZero(ids) {
-    if (moving) return;
-
-    if (source === "sim") {
-        ids.forEach(id => {
-            simZero[id - 1] = actual[id - 1];
-        });
-
-        log("SIM SETZERO saved without movement");
-        return;
-    }
-
-    if (!confirm(
-        `SETZERO Servo ${ids.join(", ")} `
-        + `at current position? (No movement)`
-    )) {
-        return;
-    }
-
-    try {
-        busy(true);
-
-        for (const id of ids) {
-            const r = await fetch(
-                `/api/servo/${id}/zero`,
-                {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json"
-                    },
-                    body: JSON.stringify({
-                        confirm: true
-                    })
-                }
-            );
-
-            const d = await r.json();
-
-            if (!r.ok || !d.ok) {
-                throw Error(
-                    `Servo ${id}: ${d.error}`
-                );
-            }
-        }
-
-        verified = false;
-        $("verified").checked = false;
-
-        await poll();
-
         message(
             "setup-result",
-            "Saved Software Zero; verify geometry again before REAL MOVE"
+            "Software Zero saved (no motor movement)"
         );
 
-        log("REAL SETZERO saved");
+        log(
+            "SETZERO " + ids.join(",")
+        );
 
     } catch (e) {
         message(
@@ -1699,116 +1320,457 @@ async function setZero(ids) {
         );
 
     } finally {
-        busy(false);
+        setWorking(false);
+        render();
     }
 }
 
 
-// =======================================
-// 17. SAVE GEOMETRY
-// =======================================
+// =====================================
+// FK SIMULATION
+// =====================================
 
-function saveGeom() {
-    const newG = {
-        h: val("g-h"),
-        l1: val("g-l1"),
-        l2: val("g-l2"),
-        l3: val("g-l3"),
-        dirs: IDS.map(id => val("dir-" + id))
-    };
+function simTargetQ() {
+    const q = IDS.map(id =>
+        number("joint-" + id)
+    );
+
+    checkQ(q);
+
+    return q;
+}
+
+function simVelocity() {
+    const v = IDS.map(id =>
+        number("velocity-" + id)
+    );
 
     if (
-        Object.values(newG).slice(0, 4)
-            .some(x => !Number.isFinite(x) || x < 0)
-        || newG.l1 === 0
-        || newG.l2 === 0
-        || newG.dirs.some(x => Math.abs(x) !== 1)
+        v.some(x =>
+            x < 1 || x > 60
+        )
     ) {
-        message(
-            "setup-result",
-            "Invalid geometry values",
-            true
+        throw Error(
+            "Velocity must be 1..60 °/s"
+        );
+    }
+
+    return v;
+}
+
+async function animate(q, v) {
+    checkQ(q);
+
+    const start = [...simQ];
+
+    const duration = Math.max(
+        100,
+        1000 * Math.max(
+            ...IDS.map((id, i) =>
+                Math.abs(q[i] - start[i])
+                / v[i]
+            )
+        )
+    );
+
+    const t0 = performance.now();
+
+    while (true) {
+        if (simCancelled) {
+            throw Error(
+                "Simulation cancelled"
+            );
+        }
+
+        const t = clamp(
+            (performance.now() - t0) / duration,
+            0,
+            1
         );
 
+        simQ = start.map(
+            (x, i) =>
+                x + (q[i] - x) * t
+        );
+
+        render();
+
+        if (t >= 1) break;
+
+        await sleep(30);
+    }
+}
+
+async function moveSim(
+    ids = IDS,
+    override = null
+) {
+    if (
+        mode !== "sim"
+        || working
+    ) {
         return;
     }
 
-    geom = newG;
+    try {
+        const goal =
+            override || simTargetQ();
 
-    verified = false;
-    $("verified").checked = false;
+        const q = [...simQ];
+        const v = simVelocity();
 
-    localStorage.setItem(
-        "robot_lamp_geometry",
-        JSON.stringify(geom)
-    );
+        ids.forEach(id => {
+            q[id - 1] = goal[id - 1];
+        });
 
-    render();
+        simCancelled = false;
+        setWorking(true);
 
-    log("Geometry saved (not yet verified)");
+        await animate(q, v);
 
-    message(
-        "setup-result",
-        "Geometry saved. Recheck calibration before REAL MOVE"
-    );
+        message(
+            "fk-result",
+            "FK Simulation completed"
+        );
+
+    } catch (e) {
+        message(
+            "fk-result",
+            e.message,
+            true
+        );
+
+    } finally {
+        setWorking(false);
+        render();
+    }
+}
+
+function previewFK() {
+    try {
+        const p = fk(simTargetQ());
+
+        message(
+            "fk-result",
+            `Target XYZ: ${fmt(p.x)}, ${fmt(p.y)}, ${fmt(p.z)} mm`
+        );
+
+    } catch (e) {
+        message(
+            "fk-result",
+            e.message,
+            true
+        );
+    }
 }
 
 
-// =======================================
-// 18. INITIALIZE DASHBOARD
-// =======================================
+// =====================================
+// IK SIMULATION
+// =====================================
+
+function getIK() {
+    const p = {
+        x: number("ik-x"),
+        y: number("ik-y"),
+        z: number("ik-z")
+    };
+
+    const pitch = number("ik-pitch");
+    const velocity = number("ik-speed");
+
+    if (
+        velocity < 1
+        || velocity > 50
+    ) {
+        throw Error(
+            "IK velocity must be 1..50 mm/s"
+        );
+    }
+
+    return {
+        p,
+        pitch,
+        velocity,
+        q: ik(
+            p,
+            pitch,
+            $("ik-elbow").value
+        )
+    };
+}
+
+function previewIK() {
+    try {
+        const t = getIK();
+
+        message(
+            "ik-result",
+            t.q.map(
+                (v, i) =>
+                    `J${i + 1}=${fmt(v)}°`
+            ).join(" | ")
+        );
+
+    } catch (e) {
+        message(
+            "ik-result",
+            e.message,
+            true
+        );
+    }
+}
+
+async function moveIK() {
+    if (
+        mode !== "sim"
+        || working
+    ) {
+        return;
+    }
+
+    try {
+        const goal = getIK();
+
+        const startQ = [...simQ];
+        const start = fk(startQ);
+
+        const dist = Math.hypot(
+            goal.p.x - start.x,
+            goal.p.y - start.y,
+            goal.p.z - start.z
+        );
+
+        const duration = Math.max(
+            .1,
+            dist / goal.velocity
+        );
+
+        const began = performance.now();
+
+        simCancelled = false;
+        setWorking(true);
+
+        while (true) {
+            if (simCancelled) {
+                throw Error(
+                    "Simulation cancelled"
+                );
+            }
+
+            const r = clamp(
+                (performance.now() - began)
+                / (duration * 1000),
+                0,
+                1
+            );
+
+            const p = {
+                x: start.x
+                   + (goal.p.x - start.x) * r,
+                y: start.y
+                   + (goal.p.y - start.y) * r,
+                z: start.z
+                   + (goal.p.z - start.z) * r
+            };
+
+            simQ = ik(
+                p,
+                start.pitch
+                + (goal.pitch - start.pitch) * r,
+                $("ik-elbow").value
+            );
+
+            render();
+
+            if (r >= 1) break;
+
+            await sleep(30);
+        }
+
+        message(
+            "ik-result",
+            "IK Simulation completed"
+        );
+
+    } catch (e) {
+        message(
+            "ik-result",
+            e.message,
+            true
+        );
+
+    } finally {
+        setWorking(false);
+        render();
+    }
+}
+
+
+// =====================================
+// SAVE GEOMETRY
+// =====================================
+
+function saveGeometry() {
+    try {
+        const g = {
+            h: number("g-h"),
+            l1: number("g-l1"),
+            l2: number("g-l2"),
+            l3: number("g-l3"),
+            dirs: IDS.map(
+                id => Number(
+                    $("dir-" + id).value
+                )
+            )
+        };
+
+        if (
+            g.h < 0
+            || g.l1 <= 0
+            || g.l2 <= 0
+            || g.l3 < 0
+            || g.dirs.some(
+                n => Math.abs(n) !== 1
+            )
+        ) {
+            throw Error(
+                "Invalid geometry"
+            );
+        }
+
+        geom = g;
+
+        localStorage.setItem(
+            "robot_lamp_geometry",
+            JSON.stringify(g)
+        );
+
+        render();
+
+        message(
+            "setup-result",
+            "Geometry saved in browser; REAL XYZ remains uncalibrated"
+        );
+
+    } catch (e) {
+        message(
+            "setup-result",
+            e.message,
+            true
+        );
+    }
+}
+
+
+// =====================================
+// CREATE SERVO 1–4 CONTROLS
+// =====================================
 
 function init() {
     try {
-        const old = JSON.parse(
-            localStorage.getItem("robot_lamp_geometry")
+        const saved = JSON.parse(
+            localStorage.getItem(
+                "robot_lamp_geometry"
+            )
         );
 
         if (
-            old
-            && old.l1 > 0
-            && old.l2 > 0
-            && old.l3 >= 0
-            && Array.isArray(old.dirs)
-            && old.dirs.length === 4
+            saved
+            && saved.l1 > 0
+            && saved.l2 > 0
+            && saved.l3 >= 0
+            && saved.dirs?.length === 4
         ) {
-            geom = old;
+            geom = saved;
         }
 
-    } catch (e) {}
+    } catch (_) {}
 
-    for (const key of ["h", "l1", "l2", "l3"]) {
-        $("g-" + key).value = geom[key];
+    for (const k of ["h", "l1", "l2", "l3"]) {
+        $("g-" + k).value = geom[k];
     }
 
-    IDS.forEach((id, i) => {
-        $("joint-rows").insertAdjacentHTML(
+    for (const id of IDS) {
+        $("feedback").insertAdjacentHTML(
+            "beforeend",
+            `<div>
+                <small>Servo ${id}</small>
+                <strong id="read-angle-${id}">—</strong>
+                <small id="read-ticks-${id}">—</small>
+            </div>`
+        );
+
+        $("servo-rows").insertAdjacentHTML(
             "beforeend",
             `
-            <div class="joint">
-                <b>Servo ${id}</b>
+            <div class="servo-card">
+                <div class="servo-head">
+                    <h3>Servo ${id}</h3>
+                    <span class="muted" id="row-actual-${id}">
+                        —
+                    </span>
+                </div>
 
-                <label class="field">
-                    <span>Target angle (°)</span>
-                    <input type="number"
-                           id="joint-${id}"
-                           step="1">
-                </label>
+                <small id="row-info-${id}">—</small>
 
-                <label class="field">
-                    <span>Velocity (°/s)</span>
-                    <input type="number"
-                           id="vel-${id}"
-                           min="1"
-                           max="60"
-                           value="20">
-                </label>
+                <div class="servo-fields">
+                    <label class="field real-only">
+                        <span>Target ticks (REAL)</span>
+                        <input type="number"
+                               id="target-${id}"
+                               step="1"
+                               placeholder="Target ticks">
+                    </label>
 
-                <div class="jbuttons">
-                    <button id="minus-${id}">−5°</button>
-                    <button id="plus-${id}">+5°</button>
-                    <button id="move-${id}" class="blue">MOVE</button>
-                    <button id="zero-${id}">SETZERO</button>
+                    <label class="field sim-only">
+                        <span>Target angle (°, SIM)</span>
+                        <input type="number"
+                               id="joint-${id}"
+                               step="1">
+                    </label>
+
+                    <label class="field">
+                        <span>Velocity (°/s, SIM only)</span>
+                        <input type="number"
+                               id="velocity-${id}"
+                               value="20"
+                               min="1"
+                               max="60">
+                    </label>
+
+                    <label class="field">
+                        <span>Zero</span>
+                        <button id="zero-${id}"
+                                style="width:100%">
+                            SETZERO
+                        </button>
+                    </label>
+                </div>
+
+                <div class="servo-buttons real-only">
+                    <button id="minus-${id}">
+                        −1 tick
+                    </button>
+
+                    <button id="plus-${id}">
+                        +1 tick
+                    </button>
+
+                    <button id="move-${id}"
+                            class="primary">
+                        MOVE
+                    </button>
+
+                    <button id="home-${id}">
+                        GO ZERO
+                    </button>
+                </div>
+
+                <div class="servo-buttons sim-only">
+                    <button id="sim-move-${id}">
+                        MOVE ANGLE (SIM)
+                    </button>
                 </div>
             </div>
             `
@@ -1827,65 +1789,58 @@ function init() {
             `
         );
 
-        $("dir-" + id).value = geom.dirs[i];
+        $("dir-" + id).value =
+            geom.dirs[id - 1];
 
-        $("feedback").insertAdjacentHTML(
-            "beforeend",
-            `
-            <div>
-                <small>Servo ${id}</small>
-                <b id="read-angle-${id}">—</b>
-                <small id="read-ticks-${id}">—</small>
-            </div>
-            `
+        $("target-" + id).addEventListener(
+            "keydown",
+            e => {
+                if (e.key === "Enter") {
+                    moveReal(id);
+                }
+            }
         );
 
-        $("minus-" + id).onclick = () => {
-            $("joint-" + id).value =
-                val("joint-" + id) - 5;
-
-            previewFK();
-        };
-
-        $("plus-" + id).onclick = () => {
-            $("joint-" + id).value =
-                val("joint-" + id) + 5;
-
-            previewFK();
-        };
-
         $("move-" + id).onclick =
-            () => moveFK([id]);
+            () => moveReal(id);
+
+        $("plus-" + id).onclick =
+            () => moveReal(
+                id,
+                servo(id).actual + 1
+            );
+
+        $("minus-" + id).onclick =
+            () => moveReal(
+                id,
+                servo(id).actual - 1
+            );
+
+        $("home-" + id).onclick =
+            () => moveReal(
+                id,
+                servo(id).zero
+            );
 
         $("zero-" + id).onclick =
             () => setZero([id]);
-    });
 
-    setJointFields(actual);
-    setIKFields(actual);
+        $("sim-move-" + id).onclick =
+            () => moveSim([id]);
+    }
 
-    for (const t of ["ik", "fk", "setup"]) {
-        $("tab-" + t).onclick =
-            () => showTab(t);
+    syncSimFields();
+
+    for (const name of ["fk", "ik", "setup"]) {
+        $("tab-" + name).onclick =
+            () => showTab(name);
     }
 
     $("sim-mode").onclick =
-        () => sourceMode("sim");
+        () => changeMode("sim");
 
     $("real-mode").onclick =
-        () => sourceMode("real");
-
-    $("ik-preview").onclick = previewIK;
-    $("ik-move").onclick = moveIK;
-
-    $("fk-preview").onclick = previewFK;
-    $("fk-move").onclick = () => moveFK();
-
-    $("ik-home").onclick = goZero;
-    $("fk-home").onclick = goZero;
-
-    $("ik-cancel").onclick = cancel;
-    $("fk-cancel").onclick = cancel;
+        () => changeMode("real");
 
     $("refresh").onclick = async () => {
         try {
@@ -1893,48 +1848,57 @@ function init() {
             log("Feedback refreshed");
 
         } catch (e) {
-            log(e.message);
-        }
-    };
-
-    $("save-geometry").onclick = saveGeom;
-
-    $("set-zero-all").onclick =
-        () => setZero(IDS);
-
-    $("verified").onchange = () => {
-        if ($("verified").checked) {
-            verified = confirm(
-                "ยืนยันว่าค่าขนาดแขน ทิศทางแกน "
-                + "Zero และพื้นที่เคลื่อนที่ "
-                + "ถูกสอบเทียบกับเครื่องจริงแล้ว?"
+            log(
+                "Refresh failed: " + e.message
             );
-
-            $("verified").checked = verified;
-
-        } else {
-            verified = false;
         }
-
-        render();
     };
+
+    $("fk-preview").onclick = previewFK;
+    $("fk-move").onclick = () => moveSim();
+
+    $("fk-home").onclick =
+        () => moveSim(
+            IDS,
+            [...simZero]
+        );
+
+    $("ik-preview").onclick = previewIK;
+    $("ik-move").onclick = moveIK;
+
+    $("ik-home").onclick =
+        () => moveSim(
+            IDS,
+            [...simZero]
+        );
+
+    $("sim-cancel").onclick = () => {
+        simCancelled = true;
+        log("Simulation cancelled");
+    };
+
+    $("cancel-real").onclick = cancelReal;
+
+    $("save-geometry").onclick =
+        saveGeometry;
+
+    $("zero-all").onclick =
+        () => setZero(IDS);
 
     window.addEventListener(
         "resize",
         render
     );
 
-    setInterval(poll, 2000);
+    setInterval(getStatus, 2000);
 
-    poll();
+    getStatus();
     render();
 
-    log("Dashboard ready in Simulation mode");
+    log("Dashboard ready");
 }
 
 init();
-
 </script>
-
 </body>
 </html>
