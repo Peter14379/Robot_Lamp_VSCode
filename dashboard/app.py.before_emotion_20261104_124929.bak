@@ -1,0 +1,858 @@
+
+"""Robot Lamp Dashboard - Direct Target Ticks.
+ESP32 V1.8 / SCS15 Servo ID 1-4 / COM3 / 115200.
+
+Fixed:
+- READPOS / READINFO accept 4 servo responses
+- MOVE OK accepts responses with or without SPEED
+- Step-by-step movement with actual feedback
+- Software SETZERO
+- Cancel future movement steps
+"""
+
+import json
+import re
+import threading
+import time
+from pathlib import Path
+
+import serial
+from flask import Flask, jsonify, request, send_file
+
+
+# ==========================================
+# 1. CONFIGURATION
+# ==========================================
+
+BASE = Path(__file__).resolve().parent
+
+PORT = "COM3"
+BAUD = 115200
+
+IDS = (1, 2, 3, 4)
+
+ZERO_FILE = BASE / "servo_zeros.json"
+HTML_FILE = BASE / "templates" / "index.html"
+
+MARGIN = 20
+STEP = 20
+TOLERANCE = 1
+
+STEP_TIMEOUT = 8
+TOTAL_TIMEOUT = 120
+
+app = Flask(__name__)
+
+state_lock = threading.RLock()
+serial_lock = threading.Lock()
+cancel_event = threading.Event()
+
+port = None
+
+
+# ==========================================
+# 2. SERVO STATES
+# ==========================================
+
+servos = {
+    i: dict(
+        id=i,
+        actual=None,
+        min=None,
+        max=None,
+        voltage=None,
+        temperature=None,
+        online=False,
+        zero=None
+    )
+    for i in IDS
+}
+
+state = dict(
+    connected=False,
+    info_ready=False,
+    busy=False,
+    error=None,
+    position_at=0.0,
+    info_at=0.0
+)
+
+
+# ==========================================
+# 3. ESP32 RESPONSE PATTERNS
+# ==========================================
+
+POS_RE = re.compile(
+    r"^\[POSITION\] Servo ID (\d+) = (\d+) ticks$"
+)
+
+INFO_RE = re.compile(
+    r"^\[INFO\] ID=(\d+) MIN=(\d+) MAX=(\d+) "
+    r"VOLTAGE=([\d.]+) TEMP=(\d+)$"
+)
+
+# Supports both:
+# [MOVE OK] ID=4 FROM=304 TARGET=284
+# [MOVE OK] ID=4 FROM=304 TARGET=284 SPEED=80
+
+MOVE_RE = re.compile(
+    r"^\[MOVE OK\]\s+ID=(\d+)\s+FROM=(\d+)\s+"
+    r"TARGET=(\d+)(?:\s+SPEED=(\d+))?$"
+)
+
+
+# ==========================================
+# 4. LOAD / SAVE SOFTWARE ZERO
+# ==========================================
+
+def load_zeros():
+    try:
+        data = json.loads(
+            ZERO_FILE.read_text(encoding="utf-8")
+        )
+
+        for i in IDS:
+            value = data.get(str(i))
+
+            if (
+                type(value) is int
+                and 0 <= value <= 1023
+            ):
+                servos[i]["zero"] = value
+
+    except (
+        OSError,
+        ValueError,
+        TypeError,
+        AttributeError
+    ):
+        pass
+
+
+def save_zeros():
+    data = {
+        str(i): servos[i]["zero"]
+        for i in IDS
+        if servos[i]["zero"] is not None
+    }
+
+    temp = ZERO_FILE.with_suffix(".json.tmp")
+
+    temp.write_text(
+        json.dumps(data, indent=2),
+        encoding="utf-8"
+    )
+
+    temp.replace(ZERO_FILE)
+
+
+# ==========================================
+# 5. SERIAL TRANSACTION
+# ==========================================
+
+def transact(command, timeout):
+    """
+    READPOS:
+        Complete when all four IDs respond.
+
+    READINFO:
+        Complete when all four IDs respond.
+
+    MOVE:
+        Complete when MOVE OK is received,
+        with or without SPEED.
+
+    Caller must hold serial_lock.
+    """
+
+    global port
+
+    if port is None or not port.is_open:
+        port = serial.Serial(
+            PORT,
+            BAUD,
+            timeout=0.12,
+            write_timeout=0.8
+        )
+
+        time.sleep(1.8)
+
+    port.reset_input_buffer()
+
+    port.write(
+        (command + "\n").encode("ascii")
+    )
+
+    port.flush()
+
+    deadline = time.monotonic() + timeout
+
+    lines = []
+    found = set()
+
+    while time.monotonic() < deadline:
+        raw = port.readline()
+
+        if not raw:
+            continue
+
+        line = raw.decode(
+            "utf-8",
+            errors="replace"
+        ).strip()
+
+        if not line:
+            continue
+
+        lines.append(line)
+        lines = lines[-70:]
+
+        # READPOS
+        if command == "READPOS":
+            match = POS_RE.fullmatch(line)
+
+            if match and int(match[1]) in IDS:
+                found.add(int(match[1]))
+
+            if len(found) == len(IDS):
+                return lines
+
+        # READINFO
+        elif command == "READINFO":
+            match = INFO_RE.fullmatch(line)
+
+            if match and int(match[1]) in IDS:
+                found.add(int(match[1]))
+
+            if len(found) == len(IDS):
+                return lines
+
+        # MOVE
+        elif command.startswith("MOVE "):
+
+            if MOVE_RE.fullmatch(line):
+                return lines
+
+            if (
+                "[MOVE ERROR]" in line
+                or "[MOVE FAIL]" in line
+            ):
+                raise RuntimeError(
+                    "ESP32 refused MOVE: " + line
+                )
+
+    raise TimeoutError(
+        f"{command} timeout; "
+        f"received={lines[-10:]}"
+    )
+
+
+# ==========================================
+# 6. READ ACTUAL POSITIONS
+# ==========================================
+
+def read_positions():
+    lines = transact("READPOS", 8)
+
+    found = {}
+
+    for line in lines:
+        match = POS_RE.fullmatch(line)
+
+        if match and int(match[1]) in IDS:
+            found[int(match[1])] = int(match[2])
+
+    if len(found) != len(IDS):
+        raise RuntimeError(
+            "Missing position feedback"
+        )
+
+    with state_lock:
+        for i in IDS:
+            servos[i]["actual"] = found[i]
+            servos[i]["online"] = True
+
+        state["connected"] = True
+        state["position_at"] = time.monotonic()
+
+
+# ==========================================
+# 7. READ SERVO INFORMATION
+# ==========================================
+
+def read_info():
+    lines = transact("READINFO", 15)
+
+    found = {}
+
+    for line in lines:
+        match = INFO_RE.fullmatch(line)
+
+        if match and int(match[1]) in IDS:
+            found[int(match[1])] = (
+                int(match[2]),
+                int(match[3]),
+                float(match[4]),
+                int(match[5])
+            )
+
+    if len(found) != len(IDS):
+        raise RuntimeError(
+            "Missing servo information"
+        )
+
+    with state_lock:
+        for i in IDS:
+            low, high, voltage, temperature = found[i]
+
+            servos[i].update(
+                min=low,
+                max=high,
+                voltage=voltage,
+                temperature=temperature
+            )
+
+        state["info_ready"] = True
+        state["info_at"] = time.monotonic()
+
+
+# ==========================================
+# 8. REFRESH SERVO
+# ==========================================
+
+def refresh(force_info=False):
+    read_positions()
+
+    if (
+        force_info
+        or time.monotonic() - state["info_at"] > 30
+    ):
+        read_info()
+
+    with state_lock:
+        state["error"] = None
+
+
+# ==========================================
+# 9. VALIDATE SERVO FEEDBACK
+# ==========================================
+
+def checked_servo(i, target=None):
+    with state_lock:
+        s = dict(servos[i])
+
+        ready = (
+            state["connected"]
+            and state["info_ready"]
+            and s["online"]
+        )
+
+        fresh = (
+            time.monotonic() - state["position_at"] < 8
+            and time.monotonic() - state["info_at"] < 70
+        )
+
+    if not ready or not fresh:
+        raise ValueError(
+            "Servo feedback missing or stale"
+        )
+
+    actual = s["actual"]
+    low = s["min"]
+    high = s["max"]
+
+    if (
+        not all(
+            type(v) is int
+            for v in (actual, low, high)
+        )
+        or not (
+            0 <= low <= actual <= high <= 1023
+        )
+    ):
+        raise ValueError(
+            "Invalid actual ticks or servo limits"
+        )
+
+    if (
+        s["voltage"] is None
+        or not 6.5 <= s["voltage"] <= 8.4
+    ):
+        raise ValueError(
+            "Servo voltage outside configured limits"
+        )
+
+    if (
+        s["temperature"] is None
+        or s["temperature"] >= 55
+    ):
+        raise ValueError(
+            "Servo temperature too high"
+        )
+
+    if target is not None:
+        if not (
+            low + MARGIN
+            <= target
+            <= high - MARGIN
+        ):
+            raise ValueError(
+                f"Target must be "
+                f"{low + MARGIN}..{high - MARGIN} ticks"
+            )
+
+    return s
+
+
+# ==========================================
+# 10. BACKGROUND POLLING
+# ==========================================
+
+def background_poll():
+    global port
+
+    while True:
+        try:
+            with serial_lock:
+                refresh()
+
+        except Exception as exc:
+            with state_lock:
+                state.update(
+                    connected=False,
+                    info_ready=False,
+                    position_at=0.0,
+                    info_at=0.0,
+                    error=str(exc)
+                )
+
+                for i in IDS:
+                    servos[i]["online"] = False
+
+            try:
+                if port is not None:
+                    port.close()
+
+            except Exception:
+                pass
+
+            port = None
+
+        time.sleep(2)
+
+
+# ==========================================
+# 11. MOVE SERVO TO TARGET TICKS
+# ==========================================
+
+def move_absolute(i, target):
+    """
+    Move one servo using small steps.
+
+    Each step is verified using real
+    position feedback from the ESP32.
+
+    This is not collision-aware planning.
+    """
+
+    started = time.monotonic()
+
+    refresh(force_info=True)
+
+    before = checked_servo(
+        i,
+        target
+    )["actual"]
+
+    sent_any = False
+    firmware_speed = None
+
+    while (
+        time.monotonic() - started
+        < TOTAL_TIMEOUT
+    ):
+
+        if cancel_event.is_set():
+            raise RuntimeError(
+                "Cancelled next steps "
+                "(NOT hardware E-stop)"
+            )
+
+        read_positions()
+
+        s = checked_servo(i, target)
+        actual = s["actual"]
+
+        difference = target - actual
+
+        # Target reached or within tolerance
+        if (
+            difference == 0
+            or (
+                sent_any
+                and abs(difference) <= TOLERANCE
+            )
+        ):
+            return dict(
+                id=i,
+                before=before,
+                target=target,
+                actual=actual,
+                reached=(
+                    abs(difference) <= TOLERANCE
+                ),
+                firmware_speed=firmware_speed
+            )
+
+        step = min(
+            abs(difference),
+            STEP
+        )
+
+        next_target = actual + (
+            step if difference > 0 else -step
+        )
+
+        checked_servo(i, next_target)
+
+        # Send MOVE to ESP32
+        lines = transact(
+            f"MOVE {i} {next_target}",
+            8
+        )
+
+        match = next(
+            (
+                m
+                for line in lines
+                if (m := MOVE_RE.fullmatch(line))
+            ),
+            None
+        )
+
+        if (
+            not match
+            or int(match[1]) != i
+            or int(match[3]) != next_target
+        ):
+            raise RuntimeError(
+                "Unexpected MOVE response: "
+                + str(lines[-6:])
+            )
+
+        # IMPORTANT FIX:
+        # SPEED may be missing in ESP32 response.
+
+        firmware_speed = (
+            int(match.group(4))
+            if match.group(4) is not None
+            else None
+        )
+
+        sent_any = True
+
+        # Verify physical feedback
+        tolerance = (
+            0 if step <= 2
+            else TOLERANCE
+        )
+
+        step_started = time.monotonic()
+
+        while (
+            time.monotonic() - step_started
+            < STEP_TIMEOUT
+        ):
+
+            if cancel_event.is_set():
+                raise RuntimeError(
+                    "Cancelled next steps; "
+                    "current motor may still move"
+                )
+
+            time.sleep(0.2)
+
+            read_positions()
+
+            position = checked_servo(i)["actual"]
+
+            if (
+                abs(position - next_target)
+                <= tolerance
+            ):
+                break
+
+        else:
+            raise TimeoutError(
+                f"Servo {i} did not reach "
+                f"{next_target} ticks; "
+                "refresh Actual before retrying"
+            )
+
+    raise TimeoutError(
+        "Total move timeout; "
+        "refresh Actual before retrying"
+    )
+
+
+# ==========================================
+# 12. FLASK API
+# ==========================================
+
+@app.after_request
+def no_cache(response):
+    response.headers[
+        "Cache-Control"
+    ] = "no-store"
+
+    return response
+
+
+@app.get("/")
+def home():
+    return send_file(HTML_FILE)
+
+
+# ==========================================
+# 13. STATUS API
+# ==========================================
+
+@app.get("/api/status")
+def api_status():
+    with state_lock:
+        return jsonify(
+            ok=True,
+            connected=state["connected"],
+            info_ready=state["info_ready"],
+            busy=state["busy"],
+            error=state["error"],
+            servos=[
+                dict(servos[i])
+                for i in IDS
+            ]
+        )
+
+
+# ==========================================
+# 14. DIAGNOSTICS API
+# ==========================================
+
+@app.get("/api/diagnostics")
+def api_diagnostics():
+    with state_lock:
+        return jsonify(
+            ok=True,
+            port=PORT,
+            baud=BAUD,
+            connected=state["connected"],
+            info_ready=state["info_ready"],
+            busy=state["busy"],
+            serial_open=bool(
+                port and port.is_open
+            ),
+            last_error=state["error"],
+            servo_online={
+                str(i): servos[i]["online"]
+                for i in IDS
+            }
+        )
+
+
+# ==========================================
+# 15. REFRESH API
+# ==========================================
+
+@app.post("/api/refresh")
+def api_refresh():
+    try:
+        with serial_lock:
+            refresh(force_info=True)
+
+        return api_status()
+
+    except Exception as exc:
+        with state_lock:
+            state["error"] = str(exc)
+
+        return jsonify(
+            ok=False,
+            error=str(exc)
+        ), 503
+
+
+# ==========================================
+# 16. SOFTWARE SETZERO API
+# ==========================================
+
+@app.post("/api/servo/<int:sid>/zero")
+def api_zero(sid):
+
+    if sid not in IDS:
+        return jsonify(
+            ok=False,
+            error="Unknown servo"
+        ), 404
+
+    if request.get_json(silent=True) != {
+        "confirm": True
+    }:
+        return jsonify(
+            ok=False,
+            error="Confirmation flag missing"
+        ), 400
+
+    with state_lock:
+        if state["busy"]:
+            return jsonify(
+                ok=False,
+                error="Servo is moving"
+            ), 409
+
+        state["busy"] = True
+
+    try:
+        with serial_lock:
+            refresh(force_info=True)
+
+            s = checked_servo(sid)
+
+            with state_lock:
+                servos[sid]["zero"] = s["actual"]
+                save_zeros()
+
+        return jsonify(
+            ok=True,
+            zero=s["actual"]
+        )
+
+    except Exception as exc:
+        return jsonify(
+            ok=False,
+            error=str(exc)
+        ), 409
+
+    finally:
+        with state_lock:
+            state["busy"] = False
+
+
+# ==========================================
+# 17. REAL MOVE API
+# ==========================================
+
+@app.post("/api/servo/<int:sid>/move")
+def api_move(sid):
+
+    if sid not in IDS:
+        return jsonify(
+            ok=False,
+            error="Unknown servo"
+        ), 404
+
+    data = request.get_json(
+        silent=True
+    ) or {}
+
+    target = data.get("target")
+
+    if (
+        type(target) is not int
+        or not 0 <= target <= 1023
+    ):
+        return jsonify(
+            ok=False,
+            error=(
+                "Target must be integer ticks "
+                "0..1023"
+            )
+        ), 400
+
+    with state_lock:
+        if state["busy"]:
+            return jsonify(
+                ok=False,
+                error="Another command is running"
+            ), 409
+
+        state["busy"] = True
+
+    cancel_event.clear()
+
+    try:
+        with serial_lock:
+            result = move_absolute(
+                sid,
+                target
+            )
+
+        return jsonify(
+            ok=True,
+            **result
+        )
+
+    except Exception as exc:
+        with state_lock:
+            state["error"] = str(exc)
+
+        return jsonify(
+            ok=False,
+            error=str(exc),
+            note=(
+                "Read Actual position "
+                "before retrying"
+            )
+        ), 409
+
+    finally:
+        with state_lock:
+            state["busy"] = False
+
+
+# ==========================================
+# 18. CANCEL API
+# ==========================================
+
+@app.post("/api/cancel")
+def api_cancel():
+    cancel_event.set()
+
+    return jsonify(
+        ok=True,
+        message=(
+            "Will stop sending next steps; "
+            "NOT hardware E-stop"
+        )
+    )
+
+
+# ==========================================
+# 19. START FLASK SERVER
+# ==========================================
+
+if __name__ == "__main__":
+
+    load_zeros()
+
+    threading.Thread(
+        target=background_poll,
+        daemon=True
+    ).start()
+
+    print(
+        "================================"
+    )
+    print("ROBOT LAMP FK / IK DASHBOARD")
+    print(f"ESP32 PORT: {PORT}")
+    print(f"BAUD RATE: {BAUD}")
+    print(f"SERVO IDS: {IDS}")
+    print("http://127.0.0.1:5000")
+    print(
+        "================================"
+    )
+
+    app.run(
+        host="127.0.0.1",
+        port=5000,
+        debug=False,
+        threaded=True
+    )
