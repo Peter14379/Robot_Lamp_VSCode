@@ -322,10 +322,7 @@ def microphone_worker(index, rate, audio_queue, stop):
         print("[MIC ERROR]", exc)
 
 
-# ==========================================
-# VOICE RECOGNITION
-# ==========================================
-
+# =========================================
 def voice_worker(audio_queue, voice_queue, stop):
 
     recognizer = sr.Recognizer()
