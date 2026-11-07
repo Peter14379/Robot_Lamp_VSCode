@@ -41,6 +41,16 @@ import speech_recognition as sr
 
 from autonomous_behavior import AnimalAutonomy, LookBridge
 from emotion_brain import EmotionBrain, EMOTIONS
+
+# Four hand-controlled emotions.
+# CURIO is separate autonomous behavior.
+ACTIVE_EMOTIONS = (
+    "HAPPY",
+    "SURPRISED",
+    "SAD",
+    "SLEEPY",
+)
+
 from perception_memory import PerceptionMemory
 
 
@@ -68,18 +78,19 @@ FACE_MODEL_URL = (
     "blaze_face_short_range.tflite"
 )
 
+
 COLORS = {
     "IDLE": (255, 180, 50),
+    "CURIO": (90, 180, 35),
     "HAPPY": (0, 220, 255),
-    "ANGRY": (0, 0, 255),
     "SURPRISED": (255, 255, 255),
     "SAD": (255, 0, 0),
     "SLEEPY": (255, 0, 150),
 }
 
+
 VOICE_WORDS = [
     ("ดีใจ", "HAPPY"),
-    ("โกรธ", "ANGRY"),
     ("ตกใจ", "SURPRISED"),
     ("เสียใจ", "SAD"),
     ("ง่วงนอน", "SLEEPY"),
@@ -154,29 +165,33 @@ def hand_emotion(points, threshold, was_near):
             > 1.48 * dist(points[pip], points[mcp])
         )
 
-    if area >= 0.035:
-
-        if fingers == [False, True, False, False]:
-            return "ANGRY", area, near
-
-        thumb = (
-            dist(points[4], points[5])
-            > 1.25 * dist(points[3], points[5])
-        )
-
-        if thumb and not any(fingers):
-
-            if points[4].y < points[2].y - 0.04:
-                return "HAPPY", area, near
-
-            if points[4].y > points[2].y + 0.04:
-                return "SAD", area, near
-
-    return (
-        "SURPRISED" if near else "IDLE",
-        area,
-        near
+    thumb = (
+        dist(points[4], points[5])
+        > 1.25 * dist(points[3], points[5])
     )
+
+    # HAPPY - Thumbs up
+    if area >= 0.035 and thumb and not any(fingers):
+        if points[4].y < points[2].y - 0.04:
+            return "HAPPY", area, near
+
+        # SAD - Thumbs down
+        if points[4].y > points[2].y + 0.04:
+            return "SAD", area, near
+
+    # SLEEPY - Closed fist
+    if (
+        area >= 0.010
+        and not thumb
+        and not any(fingers)
+    ):
+        return "SLEEPY", area, near
+
+    # SURPRISED - Open palm near camera
+    if near and all(fingers):
+        return "SURPRISED", area, near
+
+    return "IDLE", area, near
 
 
 # ==========================================
@@ -322,7 +337,10 @@ def microphone_worker(index, rate, audio_queue, stop):
         print("[MIC ERROR]", exc)
 
 
-# =========================================
+# ==========================================
+# VOICE WORKER
+# ==========================================
+
 def voice_worker(audio_queue, voice_queue, stop):
 
     recognizer = sr.Recognizer()
@@ -363,13 +381,17 @@ def voice_worker(audio_queue, voice_queue, stop):
 
 # ==========================================
 # LATEST CAMERA FRAME
+# HD 1280x720 / MJPG / 30 FPS
 # ==========================================
 
 class LatestCamera:
 
     def __init__(self, index):
 
-        camera = cv2.VideoCapture(index, cv2.CAP_DSHOW)
+        camera = cv2.VideoCapture(
+            index,
+            cv2.CAP_DSHOW
+        )
 
         if not camera.isOpened():
             camera.release()
@@ -380,9 +402,82 @@ class LatestCamera:
                 f"Cannot open camera {index}"
             )
 
-        camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        # ==================================
+        # CAMERA QUALITY CONFIGURATION
+        # ==================================
+
+        camera.set(
+            cv2.CAP_PROP_FOURCC,
+            cv2.VideoWriter_fourcc(*"MJPG")
+        )
+
+        camera.set(
+            cv2.CAP_PROP_FRAME_WIDTH,
+            1280
+        )
+
+        camera.set(
+            cv2.CAP_PROP_FRAME_HEIGHT,
+            720
+        )
+
+        camera.set(
+            cv2.CAP_PROP_FPS,
+            30
+        )
+
+        camera.set(
+            cv2.CAP_PROP_BUFFERSIZE,
+            1
+        )
+
+        # ==================================
+        # CHECK ACTUAL CAMERA SETTINGS
+        # ==================================
+
+        actual_width = int(
+            camera.get(cv2.CAP_PROP_FRAME_WIDTH)
+        )
+
+        actual_height = int(
+            camera.get(cv2.CAP_PROP_FRAME_HEIGHT)
+        )
+
+        actual_fps = camera.get(
+            cv2.CAP_PROP_FPS
+        )
+
+        actual_fourcc = int(
+            camera.get(cv2.CAP_PROP_FOURCC)
+        )
+
+        codec = "".join(
+            chr(
+                (actual_fourcc >> (8 * i)) & 0xFF
+            )
+            for i in range(4)
+        )
+
+        print(
+            f"[CAMERA] Actual mode: "
+            f"{actual_width}x{actual_height} "
+            f"@ {actual_fps:.1f} FPS "
+            f"| Codec: {codec}"
+        )
+
+        if (
+            actual_width != 1280
+            or actual_height != 720
+        ):
+            print(
+                "[CAMERA WARNING] Webcam or driver "
+                "did not accept 1280x720. "
+                "Using reported resolution."
+            )
+
+        # ==================================
+        # CAMERA THREAD STATE
+        # ==================================
 
         self.camera = camera
         self.frame = None
@@ -395,7 +490,12 @@ class LatestCamera:
             target=self._reader,
             daemon=True
         )
+
         self.thread.start()
+
+    # ======================================
+    # CAMERA READER
+    # ======================================
 
     def _reader(self):
 
@@ -407,8 +507,10 @@ class LatestCamera:
 
             if not ok:
                 failures += 1
+
                 if failures > 15:
                     break
+
                 time.sleep(0.03)
                 continue
 
@@ -420,29 +522,52 @@ class LatestCamera:
 
         self.stop.set()
 
-    def read(self, previous_sequence, timeout=2.0):
+    # ======================================
+    # READ LATEST FRAME
+    # ======================================
 
-        deadline = time.monotonic() + timeout
+    def read(
+        self,
+        previous_sequence,
+        timeout=2.0
+    ):
+
+        deadline = (
+            time.monotonic() + timeout
+        )
 
         while (
             time.monotonic() < deadline
             and not self.stop.is_set()
         ):
+
             with self.lock:
+
                 if (
                     self.frame is not None
                     and self.sequence != previous_sequence
                 ):
-                    return self.frame.copy(), self.sequence
+                    return (
+                        self.frame.copy(),
+                        self.sequence
+                    )
 
             time.sleep(0.005)
 
         return None, previous_sequence
 
+    # ======================================
+    # CLOSE CAMERA
+    # ======================================
+
     def close(self):
 
         self.stop.set()
-        self.thread.join(timeout=1.0)
+
+        self.thread.join(
+            timeout=1.0
+        )
+
         self.camera.release()
 
 
@@ -698,6 +823,7 @@ class FastFaceTracker:
                         )
                     )
                 )
+
             except cv2.error:
                 track["points"] = None
                 continue
@@ -1032,9 +1158,8 @@ class FastFaceTracker:
 # ESP32 / FLASK TRANSPORT
 # ==========================================
 
-
-
 class EmotionTransport:
+
     def __init__(self, mode, server, port):
         self.mode = mode
         self.server = server.rstrip("/")
@@ -1042,6 +1167,7 @@ class EmotionTransport:
         self.device = None
         self.last_sent = None
         self.last_attempt = 0.0
+        self.last_sent_time = 0.0
 
         if mode == "auto":
 
@@ -1074,10 +1200,16 @@ class EmotionTransport:
         if self.mode == "preview":
             return True
 
-        if emotion == self.last_sent:
-            return True
-
         now = time.monotonic()
+
+        # CURIO can repeat after 18 seconds.
+        # Other expressions only send on change.
+        if emotion == self.last_sent:
+            if (
+                emotion != "CURIO"
+                or now - self.last_sent_time < 18.0
+            ):
+                return True
 
         if now - self.last_attempt < 1.0:
             return False
@@ -1120,12 +1252,12 @@ class EmotionTransport:
                 self.device.flush()
 
             self.last_sent = emotion
-            print("[SENT]", emotion)
+            self.last_sent_time = time.monotonic()
 
+            print("[SENT]", emotion)
             return True
 
         except Exception as exc:
-
             print("[TRANSPORT ERROR]", exc)
             return False
 
@@ -1415,11 +1547,11 @@ def main():
         ]
 
         fields += [
-            "H_" + e for e in EMOTIONS
+            "H_" + e for e in ACTIVE_EMOTIONS
         ]
 
         fields += [
-            "R_" + e for e in EMOTIONS
+            "R_" + e for e in ACTIVE_EMOTIONS
         ]
 
         with open(
@@ -1442,6 +1574,22 @@ def main():
             ) as hands:
 
                 print("[READY] Face + Hand Landmark Tracking")
+
+                # Resizable camera window
+                WINDOW_TITLE = (
+                    "Robot Lamp - Face + Hand Landmarks"
+                )
+
+                cv2.namedWindow(
+                    WINDOW_TITLE,
+                    cv2.WINDOW_NORMAL
+                )
+
+                cv2.resizeWindow(
+                    WINDOW_TITLE,
+                    960,
+                    600
+                )
 
                 previous_sequence = -1
                 previous_motion = None
@@ -1466,6 +1614,13 @@ def main():
                 last_look = "CENTER"
                 last_direction = "NONE"
                 last_face_seen = None
+
+                # CURIO / Auto Sleep
+                low_hormone_since = None
+                sleeping = False
+                curio_hold_until = 0.0
+                HORMONE_SLEEP_THRESHOLD = 0.15
+                HORMONE_SLEEP_SECONDS = 20.0
 
                 while True:
 
@@ -1760,22 +1915,103 @@ def main():
                     ):
                         mode = "ATTENTIVE"
 
-                    if look_bridge is not None:
+                    # ==================================
+                    # FINAL HAND / CURIO / SLEEPY
+                    # ==================================
 
+                    valid_hand = (
+                        hand_seen
+                        and stable in ACTIVE_EMOTIONS
+                    )
+
+                    if valid_hand:
+                        sleeping = False
+                        low_hormone_since = None
+                        curio_hold_until = 0.0
+                        expression = stable
+
+                    elif voice_active:
+                        # Preserve existing microphone path.
+                        # Legacy ANGRY is not sent to ESP32.
+                        expression = (
+                            decision.emotion
+                            if decision.emotion in ACTIVE_EMOTIONS
+                            else "IDLE"
+                        )
+                        curio_hold_until = 0.0
+
+                    else:
+                        active_hormone_peak = max(
+                            (
+                                float(
+                                    decision.hormone.get(e, 0.0)
+                                )
+                                for e in (
+                                    "HAPPY",
+                                    "SURPRISED",
+                                    "SAD"
+                                )
+                            ),
+                            default=0.0
+                        )
+
+                        if (
+                            not hand_seen
+                            and active_hormone_peak
+                            <= HORMONE_SLEEP_THRESHOLD
+                        ):
+                            if low_hormone_since is None:
+                                low_hormone_since = now
+
+                            if (
+                                now - low_hormone_since
+                                >= HORMONE_SLEEP_SECONDS
+                            ):
+                                sleeping = True
+                        else:
+                            low_hormone_since = None
+
+                        if sleeping:
+                            mode = "SLEEP"
+                            expression = "SLEEPY"
+                            curio_hold_until = 0.0
+
+                        elif hand_seen:
+                            expression = "IDLE"
+                            curio_hold_until = 0.0
+
+                        elif (
+                            mode == "EXPLORE"
+                            or now < curio_hold_until
+                        ):
+                            if now >= curio_hold_until:
+                                curio_hold_until = now + 12.0
+
+                            mode = "CURIO"
+                            expression = "CURIO"
+                            last_look = "SCAN"
+
+                        else:
+                            expression = "IDLE"
+
+                    # Prevent LookBridge from moving
+                    # motors during ESP32 CURIO motion.
+                    if look_bridge is not None:
                         look_bridge.set_paused(
-                            visual_contact
+                            expression == "CURIO"
+                            or visual_contact
                             or voice_active
                             or decision.emotion != "IDLE"
                         )
 
-                    if behavior.look is not None:
-
+                    if (
+                        behavior.look is not None
+                        and expression != "CURIO"
+                    ):
                         last_look = behavior.look
 
                         if look_bridge is not None:
                             look_bridge.submit(last_look)
-
-                    expression = behavior.expression
 
                     current = (mode, expression)
 
@@ -1821,27 +2057,41 @@ def main():
                                 else ""
                             ),
                             "face_direction": direction,
-                            "tracked_face": tracker.primary_id or "",
-                            "motion_ratio": f"{motion_ratio:.4f}",
+                            "tracked_face": (
+                                tracker.primary_id or ""
+                            ),
+                            "motion_ratio": (
+                                f"{motion_ratio:.4f}"
+                            ),
                             "voice": voice_text,
                             "expression": expression,
                             "brain_expression": decision.emotion,
                             "brain_source": decision.source,
                             "behavior_mode": mode,
                             "look": behavior.look or "",
-                            "curiosity": f"{behavior.curiosity:.4f}",
-                            "energy": f"{behavior.energy:.4f}",
-                            "arousal": f"{behavior.arousal:.4f}"
+                            "curiosity": (
+                                f"{behavior.curiosity:.4f}"
+                            ),
+                            "energy": (
+                                f"{behavior.energy:.4f}"
+                            ),
+                            "arousal": (
+                                f"{behavior.arousal:.4f}"
+                            )
                         }
 
                         row.update({
-                            "H_" + e: f"{decision.hormone[e]:.4f}"
-                            for e in EMOTIONS
+                            "H_" + e: (
+                                f"{decision.hormone.get(e, 0.0):.4f}"
+                            )
+                            for e in ACTIVE_EMOTIONS
                         })
 
                         row.update({
-                            "R_" + e: f"{decision.receptor[e]:.4f}"
-                            for e in EMOTIONS
+                            "R_" + e: (
+                                f"{decision.receptor.get(e, 0.0):.4f}"
+                            )
+                            for e in ACTIVE_EMOTIONS
                         })
 
                         writer.writerow(row)
@@ -1895,19 +2145,15 @@ def main():
                             2
                         )
 
-                    # ==================================
-                    # RESTORE GREEN HAND DOTS
-                    # ==================================
+                    # ======================
+                    # GREEN HAND LANDMARKS
+                    # ======================
 
-                    # Draw every hand landmark on
-                    # the original camera image.
                     if hand_seen:
                         draw_hand_points(
                             frame,
                             last_hand
                         )
-
-                    # No yellow face-center dot.
 
                     # ======================
                     # GUI HEADER
@@ -1989,7 +2235,7 @@ def main():
                     )
 
                     cv2.imshow(
-                        "Robot Lamp - Face + Hand Landmarks",
+                        WINDOW_TITLE,
                         display
                     )
 

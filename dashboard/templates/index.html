@@ -19,9 +19,9 @@
 
 body {
     margin: 0;
-    background: linear-gradient(130deg, #0b2035, #08121e);
+    background: linear-gradient(130deg,#0b2035,#08121e);
     color: #eef7ff;
-    font: 14px 'Segoe UI', Tahoma, sans-serif;
+    font: 14px 'Segoe UI',Tahoma,sans-serif;
 }
 
 main {
@@ -32,9 +32,9 @@ main {
 
 h1 { font-size: 26px; margin: 5px 0; }
 h2 { font-size: 18px; margin: 0 0 15px; }
-h3 { margin: 0; font-size: 15px; }
-
+h3 { font-size: 15px; margin: 0; }
 p { line-height: 1.55; }
+
 small, .muted { color: var(--muted); }
 
 header, .toolbar, .tabs, .actions,
@@ -99,14 +99,13 @@ button.danger {
 
 input, select {
     background: #091b2e;
-    color: #fff;
+    color: white;
     border: 1px solid #385a78;
     border-radius: 9px;
     padding: 10px;
     width: 100%;
 }
 
-input:disabled { opacity: .5; }
 .toolbar, .tabs { margin-bottom: 15px; }
 
 .notice {
@@ -133,18 +132,18 @@ input:disabled { opacity: .5; }
     margin-bottom: 15px;
 }
 
-.metrics, .views, .feedback, .fields,
-.servo-fields {
+.metrics, .views, .feedback,
+.fields, .servo-fields {
     display: grid;
     gap: 10px;
 }
 
-.metrics { grid-template-columns: repeat(3, 1fr); }
-.feedback { grid-template-columns: repeat(4, 1fr); }
+.metrics { grid-template-columns: repeat(3,1fr); }
+.feedback { grid-template-columns: repeat(4,1fr); }
 .views { grid-template-columns: 1fr 1fr; }
 
 .fields, .servo-fields {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(3,1fr);
 }
 
 .metric, .feedback > div {
@@ -187,6 +186,7 @@ canvas {
 
 .panel { display: none; }
 .panel.show { display: block; }
+
 .actions { margin-top: 15px; }
 
 .servo-card {
@@ -228,27 +228,126 @@ canvas {
     max-height: 165px;
     overflow: auto;
     color: #bad0e0;
-    font: 12px/1.7 Consolas, monospace;
+    font: 12px/1.7 Consolas,monospace;
 }
 
-body.real .sim-only { display: none !important; }
-body.sim .real-only { display: none !important; }
-
-@media(max-width: 950px) {
-    .columns { grid-template-columns: 1fr; }
+body.real .sim-only {
+    display: none !important;
 }
 
-@media(max-width: 570px) {
+body.sim .real-only {
+    display: none !important;
+}
+
+/* HORMONE MONITOR */
+
+#rl-monitor {
+    max-width: 1450px;
+    margin: 0 auto 30px;
+    padding: 0 22px;
+}
+
+#rl-monitor .rl-panel {
+    background: #13263c;
+    border: 1px solid #2b4a65;
+    padding: 20px;
+    border-radius: 15px;
+}
+
+#rl-monitor .rl-grid {
+    display: grid;
+    grid-template-columns: repeat(2,minmax(0,1fr));
+    gap: 18px;
+}
+
+#rl-monitor .rl-group {
+    background: #0b2033;
+    padding: 15px;
+    border-radius: 12px;
+}
+
+#rl-monitor .rl-item { margin: 13px 0; }
+
+#rl-monitor .rl-label {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 6px;
+}
+
+#rl-monitor .rl-track {
+    height: 12px;
+    background: #294359;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+#rl-monitor .rl-fill {
+    height: 100%;
+    width: 0%;
+    background: #77e7c4;
+    transition: width .35s ease;
+}
+
+#rl-monitor .rl-states {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+    margin: 15px 0;
+}
+
+#rl-monitor .rl-note {
+    font-size: 12px;
+    color: var(--muted);
+}
+
+@media(max-width:950px) {
+    .columns {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media(max-width:700px) {
+    #rl-monitor .rl-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media(max-width:570px) {
     main { padding: 12px; }
-    .views, .feedback, .metrics, .fields {
+
+    .views, .feedback, .metrics,
+    .fields, .servo-fields {
         grid-template-columns: 1fr 1fr;
     }
-    .servo-fields { grid-template-columns: 1fr 1fr; }
 }
+.motion-table {
+    border-collapse:collapse;
+    margin-top:12px;
+}
+
+.motion-table td,
+.motion-table th {
+    border-bottom:1px solid #2a4964;
+    padding:5px;
+    text-align:center;
+}
+
+.motion-table input {
+    min-width:63px;
+    width:76px;
+    padding:6px;
+    text-align:center;
+}
+
+.motion-table button {
+    padding:6px 9px;
+}
+
 </style>
 </head>
 
 <body class="sim">
+
 <main>
 
 <header>
@@ -256,11 +355,14 @@ body.sim .real-only { display: none !important; }
         <div class="brand">
             ROBOT LAMP / MOTION CONTROL
         </div>
+
         <h1>FK & IK Dashboard</h1>
+
         <small>
             ESP32 • SCS15 Servo 1–4 • Direct Target Ticks
         </small>
     </div>
+
     <div class="badge" id="connection">
         Checking ESP32...
     </div>
@@ -270,22 +372,33 @@ body.sim .real-only { display: none !important; }
     <button id="sim-mode" class="active">
         SIMULATION
     </button>
-    <button id="real-mode">REAL ESP32</button>
-    <button id="refresh">Refresh Servo</button>
-    <span class="muted" id="activity">Ready</span>
+
+    <button id="real-mode">
+        REAL ESP32
+    </button>
+
+    <button id="refresh">
+        Refresh Servo
+    </button>
+
+    <span id="activity" class="muted">
+        Ready
+    </span>
 </div>
 
 <div class="notice">
-    REAL: กรอก Target ticks ของ Servo ที่ต้องการ
-    แล้วกด MOVE (หรือ Enter) เพื่อสั่งจริงทันที
-    • ไม่มี Jog step หรือช่องติ๊กยืนยัน
-    • ระบบยังตรวจ Min/Max และตำแหน่งจริงระหว่างเคลื่อนที่
-    • CANCEL หยุดส่งคำสั่งถัดไป ไม่ใช่ Emergency Stop
+    REAL: เปลี่ยน Target ticks และ Velocity RAW 40–200
+    ได้จาก Dashboard โดยตรง
+    • MOVE สูงสุด 300 ticks ต่อครั้ง
+    • SETZERO บันทึกตำแหน่งแต่ไม่ขยับ
+    • ARM HOME ต้องอยู่ใกล้ Home ที่บันทึกไว้ก่อน
+    • CANCEL ไม่ใช่ Emergency Stop
 </div>
 
 <div class="columns">
 
 <section>
+
     <div class="card">
         <h2>End Effector Position</h2>
 
@@ -294,10 +407,12 @@ body.sim .real-only { display: none !important; }
                 <small>X (mm)</small>
                 <strong id="actual-x">—</strong>
             </div>
+
             <div class="metric">
                 <small>Y (mm)</small>
                 <strong id="actual-y">—</strong>
             </div>
+
             <div class="metric">
                 <small>Z (mm)</small>
                 <strong id="actual-z">—</strong>
@@ -327,50 +442,64 @@ body.sim .real-only { display: none !important; }
 
     <div class="card">
         <h2>Actual Servo Feedback</h2>
+
         <div id="feedback" class="feedback"></div>
     </div>
 
     <div class="card">
         <h2>System Log</h2>
+
         <pre id="log"></pre>
     </div>
+
 </section>
 
 <section>
+
     <div class="card">
 
         <div class="tabs">
             <button class="active" id="tab-fk">
                 Forward (FK)
             </button>
-            <button id="tab-ik">Inverse (IK)</button>
-            <button id="tab-setup">Setup / Zero</button>
+
+            <button id="tab-ik">
+                Inverse (IK)
+            </button>
+
+            <button id="tab-setup">
+                Setup / Zero
+            </button>
         </div>
 
         <div class="panel show" id="panel-fk">
+
             <h2>Forward Kinematics — Servo Control</h2>
 
             <p class="muted real-only">
-                REAL: กรอก Target ticks ของแต่ละ Servo
-                แล้วกด MOVE เพื่อหมุนไปยังค่าเป้าหมาย
+                REAL: ใส่ Target ticks และ Velocity RAW
+                ของ Servo 1–4 แล้วกด MOVE
             </p>
 
             <p class="muted sim-only">
-                SIM: ปรับมุม Servo และ Velocity
-                แล้วกด MOVE เพื่อจำลอง
+                SIM: ปรับมุมและ Velocity (°/s)
+                เพื่อจำลองการเคลื่อนที่
             </p>
 
             <div id="servo-rows"></div>
 
             <div class="actions sim-only">
                 <button id="fk-preview">Preview FK</button>
-                <button class="primary" id="fk-move">
+
+                <button id="fk-move" class="primary">
                     MOVE ALL (SIM)
                 </button>
+
                 <button id="fk-home">
                     GO SETZERO (SIM)
                 </button>
-                <button class="danger" id="sim-cancel">
+
+                <button id="sim-cancel" class="danger">
                     CANCEL (SIM)
                 </button>
             </div>
@@ -385,12 +514,13 @@ body.sim .real-only { display: none !important; }
         </div>
 
         <div class="panel" id="panel-ik">
+
             <h2>Inverse Kinematics — X / Y / Z</h2>
 
             <p class="muted">
-                IK ทำงานใน Simulation
-                REAL XYZ ต้องวัดความยาวแขน
-                และสอบเทียบแกนก่อน
+                IK ทำงานใน Simulation เท่านั้น
+                จนกว่าจะวัดความยาวแขน สอบเทียบ Frame
+                และทดสอบการชน
             </p>
 
             <div class="fields">
@@ -416,25 +546,40 @@ body.sim .real-only { display: none !important; }
 
                 <label class="field">
                     <span>Velocity (mm/s, SIM)</span>
-                    <input type="number" id="ik-speed"
-                           value="20" min="1" max="50">
+                    <input
+                        type="number"
+                        id="ik-speed"
+                        value="20"
+                        min="1"
+                        max="50"
+                    >
                 </label>
 
                 <label class="field">
                     <span>Elbow</span>
+
                     <select id="ik-elbow">
-                        <option value="down">Elbow down</option>
-                        <option value="up">Elbow up</option>
+                        <option value="down">
+                            Elbow down
+                        </option>
+
+                        <option value="up">
+                            Elbow up
+                        </option>
                     </select>
                 </label>
             </div>
 
             <div class="actions">
-                <button id="ik-preview">Preview IK</button>
-                <button class="primary sim-only" id="ik-move">
+                <button id="ik-preview">
+                    Preview IK
+                </button>
+
+                <button id="ik-move" class="primary sim-only">
                     MOVE TO XYZ (SIM)
                 </button>
-                <button class="sim-only" id="ik-home">
+
+                <button id="ik-home" class="sim-only">
                     GO SETZERO (SIM)
                 </button>
             </div>
@@ -443,16 +588,18 @@ body.sim .real-only { display: none !important; }
         </div>
 
         <div class="panel" id="panel-setup">
+
             <h2>Geometry / Software Zero</h2>
 
             <p class="notice">
-                ขนาด H / L1 / L2 / L3
-                เริ่มต้นเป็นค่าตัวอย่าง ไม่ใช่ขนาดแขนจริง
-                • SETZERO บันทึกตำแหน่งปัจจุบัน
-                ไม่สั่ง Servo หมุน
+                H / L1 / L2 / L3 เป็นค่าตัวอย่าง
+                ไม่ใช่แขนจริง
+                • SETZERO ไม่ขยับมอเตอร์
+                • ไม่ต้องตั้ง Zero ใหม่หากเคยบันทึกแล้ว
             </p>
 
             <div class="fields">
+
                 <label class="field">
                     <span>Base H (mm)</span>
                     <input id="g-h" type="number" min="0">
@@ -472,6 +619,7 @@ body.sim .real-only { display: none !important; }
                     <span>Tool L3 (mm)</span>
                     <input id="g-l3" type="number" min="0">
                 </label>
+
             </div>
 
             <p class="muted">
@@ -481,36 +629,338 @@ body.sim .real-only { display: none !important; }
             <div class="fields" id="directions"></div>
 
             <div class="actions">
-                <button id="save-geometry">
+                
+<p class="muted">
+    REAL FK ใช้โมเดลแขน 4 ข้อ:
+    ต้องวัดลิงก์และมุม Home จริงก่อน
+</p>
+
+<div
+    class="fields"
+    id="calibration-fields"
+></div>
+
+<label
+    style="display:flex;align-items:center;
+    gap:10px;margin:12px 0"
+>
+
+    <input
+        type="checkbox"
+        id="calibrated-check"
+        style="width:auto"
+    >
+
+    <span>
+        ยืนยันว่าได้วัดโครงสร้าง
+        และสอบเทียบมุม/แกนจริงแล้ว
+    </span>
+
+</label>
+<button id="save-geometry">
                     SAVE GEOMETRY
                 </button>
+
                 <button id="zero-all">
                     SETZERO ALL (NO MOVE)
                 </button>
             </div>
 
             <p id="setup-result" class="msg muted"></p>
+
         </div>
+
+    </div>
+
+    <!-- EMOTION SERVO -->
+
+    <div class="card real-only">
+
+        <h2>Emotion Servo Control (Home)</h2>
+
+        <p class="muted">
+            เมื่อ ARM สำเร็จ Servo 1–4 จะใช้ Software Zero
+            ที่บันทึกไว้เป็น Home และตอบสนองอารมณ์ตาม Keyframes
+        </p>
+
+        <p>
+            สถานะ:
+            <strong id="emotion-arm-status">
+                DISARMED
+            </strong>
+
+            | อารมณ์:
+            <strong id="emotion-now">
+                IDLE
+            </strong>
+        </p>
+
+        <div class="actions">
+            <button class="primary" id="arm-home">
+                ARM EMOTION FROM HOME
+            </button>
+
+            <button class="danger" id="disarm">
+                DISARM
+            </button>
+
+            <button id="apply-speeds">
+                APPLY EMOTION SPEEDS
+            </button>
+        </div>
+
+        <p class="muted">
+            เปลี่ยน Velocity RAW ของแต่ละ Servo
+            ในแท็บ FK จากนั้นกด APPLY EMOTION SPEEDS
+            หรือกด ARM เพื่อส่งค่าให้อัตโนมัติ
+        </p>
+
+        <div class="actions">
+
+            <select
+                id="emotion-test"
+                style="max-width:200px"
+            >
+                <option>IDLE</option>
+                <option>CURIO</option>
+                <option>HAPPY</option>
+                <option>SURPRISED</option>
+                <option>SAD</option>
+                <option>SLEEPY</option>
+            </select>
+
+            <button id="test-emotion">
+                TEST EMOTION
+            </button>
+
+        </div>
+
+        <p class="msg muted" id="emotion-result"></p>
+
+<!-- rl-motion-editor-v3 -->
+<div
+    class="card"
+    style="margin-top:18px;background:#0b2033"
+>
+
+    <h3>
+        ตั้งค่าระยะเคลื่อนที่แต่ละอารมณ์
+        (บันทึกถาวร)
+    </h3>
+
+    <p class="muted">
+        Servo 1–4: จำนวน ticks เทียบกับ Home
+        | 0 = Home
+        | Hold = เวลารอก่อนท่าถัดไป (ms)
+        | SAVE ไม่ทำให้มอเตอร์ขยับ
+    </p>
+
+    <label
+        class="field"
+        style="max-width:220px"
+    >
+        <span>Emotion / Behavior</span>
+
+        <select id="motion-name">
+            <option>HAPPY</option>
+            <option>SURPRISED</option>
+            <option>SAD</option>
+            <option>SLEEPY</option>
+            <option>CURIO</option>
+        </select>
+    </label>
+
+    <div style="overflow-x:auto">
+
+        <table
+            class="motion-table"
+            style="width:100%"
+        >
+
+            <thead>
+                <tr>
+                    <th>Step</th>
+                    <th>Servo 1</th>
+                    <th>Servo 2</th>
+                    <th>Servo 3</th>
+                    <th>Servo 4</th>
+                    <th>Hold ms</th>
+                    <th></th>
+                </tr>
+            </thead>
+
+            <tbody id="motion-rows"></tbody>
+
+        </table>
+
+    </div>
+
+    <div class="actions">
+
+        <button id="motion-add">
+            + เพิ่มจังหวะ
+        </button>
+
+        <button
+            class="primary"
+            id="motion-save"
+        >
+            SAVE MOTION
+        </button>
+
+        <button id="motion-reload">
+            RELOAD
+        </button>
+
+    </div>
+
+    <p
+        class="muted"
+        id="motion-result"
+    >
+        กำลังโหลดท่า...
+    </p>
+
+<!-- RL_EMOTION_SPEED_V4 -->
+
+<div style="
+    margin-top:15px;
+    padding:14px;
+    border:1px solid #385a78;
+    border-radius:10px;
+">
+
+    <h3>
+        Velocity for this emotion
+        (RAW 40-200)
+    </h3>
+
+    <p class="muted">
+        Each emotion has separate Servo 1-4
+        speeds. Values are remembered.
+    </p>
+
+    <div
+        class="fields"
+        id="emotion-speed-fields"
+    ></div>
+
+    <p
+        id="emotion-speed-result"
+        class="muted"
+    ></p>
+
+</div>
+
+
+</div>
+
+
     </div>
 
     <div class="card">
         <h2>Velocity / Diagnostics</h2>
 
         <p class="muted">
-            REAL: ความเร็วยังคงกำหนดโดยเฟิร์มแวร์ ESP32
-            (MOVE_SPEED = 80)
-            ช่อง Velocity ใน FK/IK ใช้กับ Simulation เท่านั้น
+            REAL: Velocity RAW 40–200
+            ปรับ Servo 1–4 แยกกันได้จาก Dashboard
+            และใช้กับ MOVE/Emotion
+            • SIM: Velocity หน่วย °/s เป็นคนละค่า
         </p>
 
-        <a href="/api/diagnostics" target="_blank"
-           style="color:var(--mint)">
+        <a
+            href="/api/diagnostics"
+            target="_blank"
+            rel="noopener"
+            style="color:var(--mint)"
+        >
             ESP32 Diagnostics
         </a>
     </div>
+
 </section>
 
 </div>
 </main>
+
+<!-- HORMONE MONITORING -->
+
+<div id="rl-monitor">
+<section class="rl-panel">
+
+    <h2>Robot Lamp — Hormone Monitoring</h2>
+
+    <p id="rl-monitor-status">
+        กำลังอ่านข้อมูล...
+    </p>
+
+    <div class="rl-states">
+        <span>
+            Emotion:
+            <b id="rl-emotion">-</b>
+        </span>
+
+        <span>
+            Brain:
+            <b id="rl-brain">-</b>
+        </span>
+
+        <span>
+            Gesture:
+            <b id="rl-gesture">-</b>
+        </span>
+
+        <span>
+            Mode:
+            <b id="rl-mode">-</b>
+        </span>
+    </div>
+
+    <div class="rl-grid">
+
+        <div class="rl-group">
+            <h3>Artificial Hormones</h3>
+            <div id="rl-hormone-bars"></div>
+        </div>
+
+        <div class="rl-group">
+            <h3>Receptor Response</h3>
+            <div id="rl-receptor-bars"></div>
+        </div>
+
+        <div class="rl-group">
+            <h3>Autonomous Behavior</h3>
+            <p>
+                Curiosity:
+                <b id="rl-curiosity">-</b>
+            </p>
+            <p>
+                Energy:
+                <b id="rl-energy">-</b>
+            </p>
+            <p>
+                Arousal:
+                <b id="rl-arousal">-</b>
+            </p>
+        </div>
+
+        <div class="rl-group">
+            <h3>Monitoring Information</h3>
+            <p>
+                Sample Time:
+                <b id="rl-sample-time">-</b>
+            </p>
+
+            <p class="rl-note">
+                อ่านค่าล่าสุดจาก emotion_trace.csv ทุก 1 วินาที
+                • ข้อมูลเก่าแสดง STALE DATA
+            </p>
+        </div>
+
+    </div>
+
+</section>
+</div>
 
 <script>
 "use strict";
@@ -539,7 +989,18 @@ const DEFAULT = {
     l1: 110,
     l2: 105,
     l3: 65,
-    dirs: [1, 1, 1, 1]
+    dirs: [1, 1, 1, 1],
+
+    homeAngles: [0, 0, 0, 0],
+
+    ticksPerDegree: [
+        1023/300,
+        1023/300,
+        1023/300,
+        1023/300
+    ],
+
+    realCalibrated: false
 };
 
 let geom = {
@@ -556,15 +1017,16 @@ let live = {
     connected: false,
     info_ready: false,
     busy: false,
+    emotion_armed: false,
+    emotion: "IDLE",
     servos: []
 };
 
 let working = false;
 let simCancelled = false;
 
-
 // =====================================
-// GENERAL FUNCTIONS
+// GENERAL
 // =====================================
 
 function log(s) {
@@ -585,7 +1047,7 @@ function number(id) {
     const n = Number(s);
 
     if (!s || !Number.isFinite(n)) {
-        throw Error(`Invalid: ${id}`);
+        throw Error("Invalid: " + id);
     }
 
     return n;
@@ -596,7 +1058,6 @@ function servo(id) {
         s => s.id === id
     );
 }
-
 
 // =====================================
 // FORWARD KINEMATICS
@@ -610,40 +1071,41 @@ function fk(q) {
     const t = b + c + d;
 
     const r =
-        geom.l1 * Math.cos(b)
-        + geom.l2 * Math.cos(b + c)
-        + geom.l3 * Math.cos(t);
+        geom.l1 * Math.cos(b) +
+        geom.l2 * Math.cos(b + c) +
+        geom.l3 * Math.cos(t);
 
     return {
         x: r * Math.cos(a),
         y: r * Math.sin(a),
-        z: geom.h
-           + geom.l1 * Math.sin(b)
-           + geom.l2 * Math.sin(b + c)
-           + geom.l3 * Math.sin(t),
+        z:
+            geom.h +
+            geom.l1 * Math.sin(b) +
+            geom.l2 * Math.sin(b + c) +
+            geom.l3 * Math.sin(t),
         pitch: t / DEG
     };
 }
 
 function checkQ(q) {
     if (
-        q.length !== 4
-        || q.some(x => !Number.isFinite(x))
+        q.length !== 4 ||
+        q.some(x => !Number.isFinite(x))
     ) {
         throw Error("Invalid joint angles");
     }
 
-    const limits = [150, 100, 140, 140];
+    // Simulation demo range only.
+    const limits = [300, 100, 140, 140];
 
     q.forEach((x, i) => {
         if (Math.abs(x) > limits[i]) {
             throw Error(
-                `Servo ${i + 1} exceeds demo angle range`
+                `Servo ${i+1} exceeds demo angle range`
             );
         }
     });
 }
-
 
 // =====================================
 // INVERSE KINEMATICS
@@ -654,30 +1116,39 @@ function ik(p, pitch, elbow) {
     const r = Math.hypot(p.x, p.y);
     const t = pitch * DEG;
 
-    const x = r - geom.l3 * Math.cos(t);
+    const x =
+        r - geom.l3 * Math.cos(t);
 
     const z =
-        p.z - geom.h
-        - geom.l3 * Math.sin(t);
+        p.z -
+        geom.h -
+        geom.l3 * Math.sin(t);
 
     let c =
-        (x*x + z*z - geom.l1**2 - geom.l2**2)
-        / (2 * geom.l1 * geom.l2);
+        (
+            x*x +
+            z*z -
+            geom.l1**2 -
+            geom.l2**2
+        ) /
+        (
+            2 * geom.l1 * geom.l2
+        );
 
     if (
-        !Number.isFinite(c)
-        || Math.abs(c) > 1 + 1e-7
+        !Number.isFinite(c) ||
+        Math.abs(c) > 1 + 1e-7
     ) {
         throw Error("XYZ unreachable");
     }
 
-    c = (
-        elbow === "up" ? 1 : -1
-    ) * Math.acos(clamp(c, -1, 1));
+    c =
+        (elbow === "up" ? 1 : -1) *
+        Math.acos(clamp(c, -1, 1));
 
     const b =
-        Math.atan2(z, x)
-        - Math.atan2(
+        Math.atan2(z, x) -
+        Math.atan2(
             geom.l2 * Math.sin(c),
             geom.l1 + geom.l2 * Math.cos(c)
         );
@@ -690,10 +1161,8 @@ function ik(p, pitch, elbow) {
     ];
 
     checkQ(q);
-
     return q;
 }
-
 
 // =====================================
 // REAL JOINT ANGLES
@@ -701,8 +1170,8 @@ function ik(p, pitch, elbow) {
 
 function realQ() {
     if (
-        !live.connected
-        || !live.info_ready
+        !live.connected ||
+        !live.info_ready
     ) {
         return null;
     }
@@ -711,13 +1180,15 @@ function realQ() {
         const s = servo(id);
 
         return (
-            s
-            && s.online
-            && Number.isInteger(s.actual)
-            && Number.isInteger(s.zero)
+            s &&
+            s.online &&
+            Number.isInteger(s.actual) &&
+            Number.isInteger(s.zero)
         )
             ? (s.actual - s.zero)
-              * geom.dirs[i] / TPD
+              * geom.dirs[i]
+              / geom.ticksPerDegree[i]
+              + geom.homeAngles[i]
             : NaN;
     });
 
@@ -746,7 +1217,6 @@ function syncSimFields() {
     $("ik-pitch").value = fmt(p.pitch);
 }
 
-
 // =====================================
 // ROBOT VISUALIZATION
 // =====================================
@@ -766,6 +1236,7 @@ function draw(q) {
         const ctx = canvas.getContext("2d");
 
         ctx.scale(dpr, dpr);
+
         ctx.fillStyle = "#081b2e";
         ctx.fillRect(0, 0, w, h);
 
@@ -805,28 +1276,43 @@ function draw(q) {
         let nodes;
 
         if (id === "side") {
-            const r1 = geom.l1 * Math.cos(b);
+            const r1 =
+                geom.l1 * Math.cos(b);
+
             const z1 =
-                geom.h + geom.l1 * Math.sin(b);
+                geom.h +
+                geom.l1 * Math.sin(b);
 
             const r2 =
-                r1 + geom.l2 * Math.cos(b + c);
+                r1 +
+                geom.l2 * Math.cos(b + c);
 
             const z2 =
-                z1 + geom.l2 * Math.sin(b + c);
+                z1 +
+                geom.l2 * Math.sin(b + c);
 
             const r3 =
-                r2 + geom.l3 * Math.cos(b + c + d);
+                r2 +
+                geom.l3 * Math.cos(b + c + d);
 
             const z3 =
-                z2 + geom.l3 * Math.sin(b + c + d);
+                z2 +
+                geom.l3 * Math.sin(b + c + d);
 
             const S = Math.min(
                 w * .55 /
-                (geom.l1 + geom.l2 + geom.l3),
+                (
+                    geom.l1 +
+                    geom.l2 +
+                    geom.l3
+                ),
                 h * .65 /
-                (geom.h + geom.l1
-                 + geom.l2 + geom.l3)
+                (
+                    geom.h +
+                    geom.l1 +
+                    geom.l2 +
+                    geom.l3
+                )
             );
 
             nodes = [
@@ -842,27 +1328,38 @@ function draw(q) {
         } else {
             const rs = [
                 0,
+
                 geom.l1 * Math.cos(b),
-                geom.l1 * Math.cos(b)
-                    + geom.l2 * Math.cos(b + c),
-                geom.l1 * Math.cos(b)
-                    + geom.l2 * Math.cos(b + c)
-                    + geom.l3 * Math.cos(b + c + d)
+
+                geom.l1 * Math.cos(b) +
+                geom.l2 * Math.cos(b + c),
+
+                geom.l1 * Math.cos(b) +
+                geom.l2 * Math.cos(b + c) +
+                geom.l3 * Math.cos(b + c + d)
             ];
 
             const S =
-                Math.min(w, h) * .32
-                / (geom.l1 + geom.l2 + geom.l3);
+                Math.min(w, h) * .32 /
+                (
+                    geom.l1 +
+                    geom.l2 +
+                    geom.l3
+                );
 
             nodes = rs.map(r => [
-                w / 2 + r * Math.cos(a) * S,
-                h / 2 - r * Math.sin(a) * S
+                w / 2 +
+                r * Math.cos(a) * S,
+
+                h / 2 -
+                r * Math.sin(a) * S
             ]);
         }
 
-        ctx.strokeStyle = id === "side"
-            ? "#76e7c4"
-            : "#88baff";
+        ctx.strokeStyle =
+            id === "side"
+                ? "#76e7c4"
+                : "#88baff";
 
         ctx.lineWidth = 5;
         ctx.lineCap = "round";
@@ -870,8 +1367,11 @@ function draw(q) {
         ctx.beginPath();
 
         nodes.forEach((p, i) => {
-            if (i) ctx.lineTo(...p);
-            else ctx.moveTo(...p);
+            if (i) {
+                ctx.lineTo(...p);
+            } else {
+                ctx.moveTo(...p);
+            }
         });
 
         ctx.stroke();
@@ -886,38 +1386,38 @@ function draw(q) {
                 2 * Math.PI
             );
 
-            ctx.fillStyle = i === 3
-                ? "#ffd6a5"
-                : "#f0f6ff";
+            ctx.fillStyle =
+                i === 3
+                    ? "#ffd6a5"
+                    : "#f0f6ff";
 
             ctx.fill();
         });
     }
 }
 
-
 // =====================================
-// ENABLE / DISABLE BUTTONS
+// BUTTON STATE
 // =====================================
 
 function buttons() {
     const ready = (
-        mode === "real"
-        && live.connected
-        && live.info_ready
-        && !live.busy
-        && !working
+        mode === "real" &&
+        live.connected &&
+        live.info_ready &&
+        !live.busy &&
+        !working
     );
 
     for (const id of IDS) {
         const s = servo(id);
 
         const ok = !!(
-            s
-            && s.online
-            && Number.isInteger(s.actual)
-            && Number.isInteger(s.min)
-            && Number.isInteger(s.max)
+            s &&
+            s.online &&
+            Number.isInteger(s.actual) &&
+            Number.isInteger(s.min) &&
+            Number.isInteger(s.max)
         );
 
         $("move-" + id).disabled =
@@ -925,25 +1425,29 @@ function buttons() {
 
         $("minus-" + id).disabled =
             !(
-                ready && ok
-                && s.actual - 1 >= s.min + 20
+                ready &&
+                ok &&
+                s.actual - 1 >= s.min + 20
             );
 
         $("plus-" + id).disabled =
             !(
-                ready && ok
-                && s.actual + 1 <= s.max - 20
+                ready &&
+                ok &&
+                s.actual + 1 <= s.max - 20
             );
 
         $("zero-" + id).disabled =
             mode === "sim"
                 ? working
-                : !(ready && ok);
+                : !(ready && ok) ||
+                  live.emotion_armed;
 
         $("home-" + id).disabled =
             !(
-                ready && ok
-                && Number.isInteger(s.zero)
+                ready &&
+                ok &&
+                Number.isInteger(s.zero)
             );
 
         $("sim-move-" + id).disabled =
@@ -951,6 +1455,9 @@ function buttons() {
 
         $("velocity-" + id).disabled =
             mode === "real";
+
+        $("real-speed-" + id).disabled =
+            mode !== "real" || working;
     }
 
     $("fk-move").disabled =
@@ -960,24 +1467,42 @@ function buttons() {
         working || mode !== "sim";
 
     $("zero-all").disabled =
-        working || live.busy
-        || (
-            mode === "real"
-            && !live.connected
+        working ||
+        live.busy ||
+        (
+            mode === "real" &&
+            (
+                !live.connected ||
+                live.emotion_armed
+            )
         );
+
+    $("arm-home").disabled =
+        !ready ||
+        !IDS.every(id =>
+            Number.isInteger(servo(id)?.zero)
+        );
+
+    $("disarm").disabled = !ready;
+    $("apply-speeds").disabled = !ready;
+    $("test-emotion").disabled = !ready;
 }
 
-
 // =====================================
-// UPDATE DASHBOARD
+// RENDER DASHBOARD
 // =====================================
 
 function render() {
     const q = currentQ();
 
-    const p = (
-        mode === "sim" && q
-    ) ? fk(q) : null;
+    const useRealFK =
+        mode === "sim" ||
+        geom.realCalibrated;
+
+    const p =
+        useRealFK && q
+            ? fk(q)
+            : null;
 
     for (const k of ["x", "y", "z"]) {
         $("actual-" + k).textContent =
@@ -986,54 +1511,66 @@ function render() {
 
     $("position-source").textContent =
         mode === "sim"
-        ? "SIMULATION • calculated from demo model"
-        : "REAL • actual ticks available; XYZ requires measured geometry and calibration";
+            ? "SIMULATION • calculated from demo model"
+            : geom.realCalibrated
+                ? "REAL • FK estimate from calibrated model (not sensor-measured XYZ)"
+                : "REAL • set actual geometry and Home angles in Setup/Zero";
 
     for (const id of IDS) {
         const s = servo(id);
 
-        const angle = q
-            ? q[id - 1]
-            : NaN;
+        const angle =
+            q ? q[id - 1] : NaN;
 
         $("read-angle-" + id).textContent =
             fmt(angle) + "°";
 
         $("read-ticks-" + id).textContent =
             mode === "sim"
-            ? "SIM"
-            : s && s.online
-                ? `${s.actual} ticks`
-                : "OFFLINE";
+                ? "SIM"
+                : s?.online
+                    ? `${s.actual} ticks`
+                    : "OFFLINE";
 
         $("row-actual-" + id).textContent =
             mode === "sim"
-            ? `SIM ${fmt(simQ[id - 1])}°`
-            : s && s.online
-                ? `${s.actual} ticks | Zero ${s.zero ?? "—"}`
-                : "NO FEEDBACK";
+                ? `SIM ${fmt(simQ[id - 1])}°`
+                : s?.online
+                    ? `${s.actual} ticks | Zero ${s.zero ?? "—"}`
+                    : "NO FEEDBACK";
 
         $("row-info-" + id).textContent =
             mode === "sim"
-            ? "Simulation"
-            : s && s.online
-                ? `limits ${s.min}..${s.max} | ${s.voltage}V | ${s.temperature}°C`
-                : "Offline";
+                ? "Simulation"
+                : s?.online
+                    ? `limits ${s.min}..${s.max} | ${s.voltage}V | ${s.temperature}°C`
+                    : "Offline";
 
         if (
-            mode === "real"
-            && s
-            && Number.isInteger(s.actual)
-            && $("target-" + id).dataset.seeded !== "yes"
+            mode === "real" &&
+            s &&
+            Number.isInteger(s.actual) &&
+            $("target-" + id).dataset.seeded !== "yes"
         ) {
             $("target-" + id).value = s.actual;
-
-            $("target-" + id).dataset.seeded =
-                "yes";
+            $("target-" + id).dataset.seeded = "yes";
         }
     }
 
-    draw(mode === "sim" ? q : null);
+    $("emotion-arm-status").textContent =
+        live.emotion_armed
+            ? "ARMED (4 SERVOS)"
+            : "DISARMED";
+
+    $("emotion-arm-status").style.color =
+        live.emotion_armed
+            ? "#76e7c4"
+            : "#ffd18a";
+
+    $("emotion-now").textContent =
+        live.emotion || "IDLE";
+
+    draw(useRealFK ? q : null);
 
     buttons();
 }
@@ -1041,23 +1578,21 @@ function render() {
 function setWorking(v) {
     working = v;
 
-    $("activity").textContent = v
-        ? "Working..."
-        : "Ready";
+    $("activity").textContent =
+        v ? "Working..." : "Ready";
 
     buttons();
 }
 
-
 // =====================================
-// ESP32 STATUS / HTTP API
+// HTTP API
 // =====================================
 
 async function getStatus() {
     try {
         const r = await fetch(
             "/api/status",
-            {cache: "no-store"}
+            { cache: "no-store" }
         );
 
         if (!r.ok) {
@@ -1068,19 +1603,20 @@ async function getStatus() {
 
         $("connection").textContent =
             live.connected
-            ? "ESP32 CONNECTED"
-            : "ESP32 OFFLINE";
+                ? "ESP32 CONNECTED"
+                : "ESP32 OFFLINE";
 
         $("connection").style.color =
             live.connected
-            ? "#76e7c4"
-            : "#ff9da6";
+                ? "#76e7c4"
+                : "#ff9da6";
 
     } catch (e) {
         live = {
             connected: false,
             info_ready: false,
             busy: false,
+            emotion_armed: false,
             servos: []
         };
 
@@ -1119,9 +1655,8 @@ async function refresh() {
     render();
 }
 
-
 // =====================================
-// CHANGE MODE / TAB
+// MODE / TAB
 // =====================================
 
 function changeMode(next) {
@@ -1147,6 +1682,7 @@ function changeMode(next) {
     }
 
     render();
+
     log("Mode: " + next.toUpperCase());
 }
 
@@ -1164,6 +1700,40 @@ function showTab(name) {
     }
 }
 
+// =====================================
+// REAL SERVO SPEED
+// =====================================
+
+function speeds() {
+    const result = {};
+
+    for (const id of IDS) {
+        const v = number(
+            "real-speed-" + id
+        );
+
+        if (
+            !Number.isInteger(v) ||
+            v < 40 ||
+            v > 200
+        ) {
+            throw Error(
+                `Servo ${id}: speed 40..200 RAW`
+            );
+        }
+
+        result[id] = v;
+    }
+
+    return result;
+}
+
+function saveSpeeds() {
+    localStorage.setItem(
+        "robot_lamp_speeds",
+        JSON.stringify(speeds())
+    );
+}
 
 // =====================================
 // REAL SERVO MOVE
@@ -1176,56 +1746,79 @@ async function moveReal(
     if (working || mode !== "real") return;
 
     try {
-        const target = targetOverride === null
-            ? number("target-" + id)
-            : targetOverride;
+        const target =
+            targetOverride === null
+                ? number("target-" + id)
+                : targetOverride;
+
+        const speed =
+            number("real-speed-" + id);
 
         if (!Number.isInteger(target)) {
             throw Error(
-                "Target ticks must be an integer"
+                "Target ticks must be integer"
+            );
+        }
+
+        if (
+            !Number.isInteger(speed) ||
+            speed < 40 ||
+            speed > 200
+        ) {
+            throw Error(
+                "Velocity 40..200 RAW"
             );
         }
 
         const s = servo(id);
 
-        if (!s || !s.online) {
-            throw Error("Servo not connected");
+        if (!s?.online) {
+            throw Error(
+                "Servo not connected"
+            );
         }
 
         if (
-            target < s.min + 20
-            || target > s.max - 20
+            target < s.min + 20 ||
+            target > s.max - 20
         ) {
             throw Error(
-                `Target must be ${s.min + 20}..${s.max - 20} ticks`
+                `Target must be ${s.min+20}..${s.max-20} ticks`
+            );
+        }
+
+        if (
+            Math.abs(target - s.actual) > 300
+        ) {
+            throw Error(
+                "MOVE limited to 300 ticks from Actual"
             );
         }
 
         $("target-" + id).value = target;
 
         setWorking(true);
+        saveSpeeds();
 
         message(
             "fk-result",
-            `Moving Servo ${id} to ${target} ticks...`
-        );
-
-        log(
-            `MOVE Servo ${id} -> ${target} ticks`
+            `Moving Servo ${id} -> ${target} ticks at RAW ${speed}...`
         );
 
         const result = await post(
             `/api/servo/${id}/move`,
-            {target}
+            { target, speed }
         );
 
         message(
             "fk-result",
-            `Servo ${id}: Target ${result.target}, Actual ${result.actual} ticks`
+            `Servo ${id}: Target ${result.target}, ` +
+            `Actual ${result.actual} ticks | Speed ${speed}`
         );
 
         log(
-            `Servo ${id}: ${result.before} -> ${result.actual} (target ${target})`
+            `MOVE Servo ${id}: ${result.before} -> ${result.actual}` +
+            ` (target ${target}; speed ${speed})`
         );
 
         await refresh();
@@ -1233,14 +1826,12 @@ async function moveReal(
     } catch (e) {
         message(
             "fk-result",
-            e.message
-            + " — refresh actual before retrying",
+            e.message +
+            " — refresh actual before retrying",
             true
         );
 
-        log(
-            "MOVE ERROR: " + e.message
-        );
+        log("MOVE ERROR: " + e.message);
 
         try {
             await refresh();
@@ -1252,15 +1843,13 @@ async function moveReal(
     }
 }
 
-
 // =====================================
-// CANCEL FUTURE MOVEMENT STEPS
+// CANCEL
 // =====================================
 
 async function cancelReal() {
     try {
         const d = await post("/api/cancel");
-
         log(d.message);
 
     } catch (e) {
@@ -1270,9 +1859,8 @@ async function cancelReal() {
     }
 }
 
-
 // =====================================
-// SOFTWARE ZERO
+// SETZERO
 // =====================================
 
 async function setZero(ids) {
@@ -1297,7 +1885,7 @@ async function setZero(ids) {
         for (const id of ids) {
             await post(
                 `/api/servo/${id}/zero`,
-                {confirm: true}
+                { confirm: true }
             );
         }
 
@@ -1325,14 +1913,144 @@ async function setZero(ids) {
     }
 }
 
+// =====================================
+// EMOTION ARM / DISARM / SPEED
+// =====================================
+
+async function emotionAction(action) {
+    if (
+        working ||
+        mode !== "real"
+    ) {
+        return;
+    }
+
+    setWorking(true);
+
+    try {
+        const payload =
+            action === "arm" ||
+            action === "speed"
+                ? { speeds: speeds() }
+                : {};
+
+        const url =
+            action === "arm"
+                ? "/api/emotion/arm"
+                : action === "disarm"
+                    ? "/api/emotion/disarm"
+                    : "/api/emotion/speed";
+
+        const d = await post(
+            url,
+            payload
+        );
+
+        if (action !== "disarm") {
+            saveSpeeds();
+        }
+
+        if (action === "arm") {
+            message(
+                "emotion-result",
+                "ARM สำเร็จ: Servo 1–4 พร้อมใช้ Home " +
+                "ที่บันทึกไว้ (ยังไม่สั่งเคลื่อนที่)"
+            );
+
+        } else if (action === "disarm") {
+            message(
+                "emotion-result",
+                "DISARM สำเร็จ"
+            );
+
+        } else {
+            message(
+                "emotion-result",
+                "Emotion speed applied to Servo 1–4"
+            );
+        }
+
+        log(
+            action.toUpperCase() +
+            " " +
+            JSON.stringify(d)
+        );
+
+        await refresh();
+
+    } catch (e) {
+        message(
+            "emotion-result",
+            e.message,
+            true
+        );
+
+        log(
+            "EMOTION ERROR: " + e.message
+        );
+
+    } finally {
+        setWorking(false);
+        render();
+    }
+}
+
+// =====================================
+// MANUAL TEST EMOTION
+// =====================================
+
+async function testEmotion() {
+    if (
+        working ||
+        mode !== "real"
+    ) {
+        return;
+    }
+
+    setWorking(true);
+
+    try {
+        const e = $("emotion-test").value;
+
+        const d = await post(
+            "/api/emotion",
+            { emotion: e }
+        );
+
+        message(
+            "emotion-result",
+            `Emotion ${e}: ` +
+            (
+                d.armed
+                    ? "motor + RGB"
+                    : "RGB only (DISARMED)"
+            )
+        );
+
+        log("TEST " + e);
+
+        await refresh();
+
+    } catch (e) {
+        message(
+            "emotion-result",
+            e.message,
+            true
+        );
+
+    } finally {
+        setWorking(false);
+        render();
+    }
+}
 
 // =====================================
 // FK SIMULATION
 // =====================================
 
 function simTargetQ() {
-    const q = IDS.map(id =>
-        number("joint-" + id)
+    const q = IDS.map(
+        id => number("joint-" + id)
     );
 
     checkQ(q);
@@ -1341,17 +2059,15 @@ function simTargetQ() {
 }
 
 function simVelocity() {
-    const v = IDS.map(id =>
-        number("velocity-" + id)
+    const v = IDS.map(
+        id => number("velocity-" + id)
     );
 
     if (
-        v.some(x =>
-            x < 1 || x > 60
-        )
+        v.some(x => x < 1 || x > 60)
     ) {
         throw Error(
-            "Velocity must be 1..60 °/s"
+            "Velocity 1..60 °/s"
         );
     }
 
@@ -1367,8 +2083,7 @@ async function animate(q, v) {
         100,
         1000 * Math.max(
             ...IDS.map((id, i) =>
-                Math.abs(q[i] - start[i])
-                / v[i]
+                Math.abs(q[i] - start[i]) / v[i]
             )
         )
     );
@@ -1383,7 +2098,8 @@ async function animate(q, v) {
         }
 
         const t = clamp(
-            (performance.now() - t0) / duration,
+            (performance.now() - t0) /
+            duration,
             0,
             1
         );
@@ -1406,8 +2122,8 @@ async function moveSim(
     override = null
 ) {
     if (
-        mode !== "sim"
-        || working
+        mode !== "sim" ||
+        working
     ) {
         return;
     }
@@ -1452,7 +2168,8 @@ function previewFK() {
 
         message(
             "fk-result",
-            `Target XYZ: ${fmt(p.x)}, ${fmt(p.y)}, ${fmt(p.z)} mm`
+            `Target XYZ: ${fmt(p.x)}, ` +
+            `${fmt(p.y)}, ${fmt(p.z)} mm`
         );
 
     } catch (e) {
@@ -1463,7 +2180,6 @@ function previewFK() {
         );
     }
 }
-
 
 // =====================================
 // IK SIMULATION
@@ -1480,11 +2196,11 @@ function getIK() {
     const velocity = number("ik-speed");
 
     if (
-        velocity < 1
-        || velocity > 50
+        velocity < 1 ||
+        velocity > 50
     ) {
         throw Error(
-            "IK velocity must be 1..50 mm/s"
+            "IK velocity 1..50 mm/s"
         );
     }
 
@@ -1508,7 +2224,7 @@ function previewIK() {
             "ik-result",
             t.q.map(
                 (v, i) =>
-                    `J${i + 1}=${fmt(v)}°`
+                    `J${i+1}=${fmt(v)}°`
             ).join(" | ")
         );
 
@@ -1523,17 +2239,15 @@ function previewIK() {
 
 async function moveIK() {
     if (
-        mode !== "sim"
-        || working
+        mode !== "sim" ||
+        working
     ) {
         return;
     }
 
     try {
         const goal = getIK();
-
-        const startQ = [...simQ];
-        const start = fk(startQ);
+        const start = fk([...simQ]);
 
         const dist = Math.hypot(
             goal.p.x - start.x,
@@ -1559,25 +2273,39 @@ async function moveIK() {
             }
 
             const r = clamp(
-                (performance.now() - began)
-                / (duration * 1000),
+                (
+                    performance.now() - began
+                ) /
+                (
+                    duration * 1000
+                ),
                 0,
                 1
             );
 
             const p = {
-                x: start.x
-                   + (goal.p.x - start.x) * r,
-                y: start.y
-                   + (goal.p.y - start.y) * r,
-                z: start.z
-                   + (goal.p.z - start.z) * r
+                x:
+                    start.x +
+                    (goal.p.x - start.x) * r,
+
+                y:
+                    start.y +
+                    (goal.p.y - start.y) * r,
+
+                z:
+                    start.z +
+                    (goal.p.z - start.z) * r
             };
 
             simQ = ik(
                 p,
-                start.pitch
-                + (goal.pitch - start.pitch) * r,
+
+                start.pitch +
+                (
+                    goal.pitch -
+                    start.pitch
+                ) * r,
+
                 $("ik-elbow").value
             );
 
@@ -1606,7 +2334,6 @@ async function moveIK() {
     }
 }
 
-
 // =====================================
 // SAVE GEOMETRY
 // =====================================
@@ -1618,20 +2345,42 @@ function saveGeometry() {
             l1: number("g-l1"),
             l2: number("g-l2"),
             l3: number("g-l3"),
+
             dirs: IDS.map(
                 id => Number(
                     $("dir-" + id).value
                 )
-            )
+            ),
+
+            homeAngles: IDS.map(
+                id => number(
+                    "home-angle-" + id
+                )
+            ),
+
+            ticksPerDegree: IDS.map(
+                id => number(
+                    "ticks-deg-" + id
+                )
+            ),
+
+            realCalibrated:
+                $("calibrated-check").checked
         };
 
         if (
-            g.h < 0
-            || g.l1 <= 0
-            || g.l2 <= 0
-            || g.l3 < 0
-            || g.dirs.some(
+            g.h < 0 ||
+            g.l1 <= 0 ||
+            g.l2 <= 0 ||
+            g.l3 < 0 ||
+            g.dirs.some(
                 n => Math.abs(n) !== 1
+            ) ||
+            g.homeAngles.some(
+                n => !Number.isFinite(n)
+            ) ||
+            g.ticksPerDegree.some(
+                n => !Number.isFinite(n) || n <= 0
             )
         ) {
             throw Error(
@@ -1650,7 +2399,9 @@ function saveGeometry() {
 
         message(
             "setup-result",
-            "Geometry saved in browser; REAL XYZ remains uncalibrated"
+            g.realCalibrated
+                ? "Geometry saved: REAL FK model enabled"
+                : "Geometry saved: REAL XYZ disabled until calibration"
         );
 
     } catch (e) {
@@ -1662,12 +2413,12 @@ function saveGeometry() {
     }
 }
 
-
 // =====================================
-// CREATE SERVO 1–4 CONTROLS
+// CREATE SERVO CONTROLS
 // =====================================
 
 function init() {
+
     try {
         const saved = JSON.parse(
             localStorage.getItem(
@@ -1676,38 +2427,108 @@ function init() {
         );
 
         if (
-            saved
-            && saved.l1 > 0
-            && saved.l2 > 0
-            && saved.l3 >= 0
-            && saved.dirs?.length === 4
+            saved &&
+            saved.l1 > 0 &&
+            saved.l2 > 0 &&
+            saved.l3 >= 0 &&
+            saved.dirs?.length === 4
         ) {
-            geom = saved;
+            geom = {
+                ...DEFAULT,
+                ...saved,
+
+                dirs: saved.dirs,
+
+                homeAngles:
+                    Array.isArray(saved.homeAngles)
+                    && saved.homeAngles.length === 4
+                        ? saved.homeAngles
+                        : [...DEFAULT.homeAngles],
+
+                ticksPerDegree:
+                    Array.isArray(saved.ticksPerDegree)
+                    && saved.ticksPerDegree.length === 4
+                        ? saved.ticksPerDegree
+                        : [...DEFAULT.ticksPerDegree],
+
+                realCalibrated:
+                    saved.realCalibrated === true
+            };
         }
 
     } catch (_) {}
 
-    for (const k of ["h", "l1", "l2", "l3"]) {
+    let savedSpeeds = {};
+
+    try {
+        savedSpeeds = JSON.parse(
+            localStorage.getItem(
+                "robot_lamp_speeds"
+            )
+        ) || {};
+
+    } catch (_) {}
+
+    for (const k of ["h","l1","l2","l3"]) {
         $("g-" + k).value = geom[k];
     }
 
     for (const id of IDS) {
+
+        $("calibration-fields").insertAdjacentHTML(
+            "beforeend",
+
+            `<label class="field">
+                <span>
+                    Servo ${id}: Home angle (°)
+                </span>
+
+                <input
+                    type="number"
+                    step="0.1"
+                    id="home-angle-${id}"
+                    value="${geom.homeAngles[id-1]}"
+                >
+            </label>
+
+            <label class="field">
+                <span>
+                    Servo ${id}: ticks/degree
+                </span>
+
+                <input
+                    type="number"
+                    step="0.001"
+                    min="0.001"
+                    id="ticks-deg-${id}"
+                    value="${geom.ticksPerDegree[id-1]}"
+                >
+            </label>`
+        );
+
         $("feedback").insertAdjacentHTML(
             "beforeend",
-            `<div>
+            `
+            <div>
                 <small>Servo ${id}</small>
                 <strong id="read-angle-${id}">—</strong>
                 <small id="read-ticks-${id}">—</small>
-            </div>`
+            </div>
+            `
         );
 
         $("servo-rows").insertAdjacentHTML(
             "beforeend",
             `
             <div class="servo-card">
+
                 <div class="servo-head">
                     <h3>Servo ${id}</h3>
-                    <span class="muted" id="row-actual-${id}">
+
+                    <span
+                        class="muted"
+                        id="row-actual-${id}"
+                    >
                         —
                     </span>
                 </div>
@@ -1715,40 +2536,68 @@ function init() {
                 <small id="row-info-${id}">—</small>
 
                 <div class="servo-fields">
+
                     <label class="field real-only">
                         <span>Target ticks (REAL)</span>
-                        <input type="number"
-                               id="target-${id}"
-                               step="1"
-                               placeholder="Target ticks">
+
+                        <input
+                            type="number"
+                            id="target-${id}"
+                            step="1"
+                            placeholder="Target ticks"
+                        >
                     </label>
 
                     <label class="field sim-only">
                         <span>Target angle (°, SIM)</span>
-                        <input type="number"
-                               id="joint-${id}"
-                               step="1">
+
+                        <input
+                            type="number"
+                            id="joint-${id}"
+                            step="1"
+                        >
                     </label>
 
-                    <label class="field">
-                        <span>Velocity (°/s, SIM only)</span>
-                        <input type="number"
-                               id="velocity-${id}"
-                               value="20"
-                               min="1"
-                               max="60">
+                    <label class="field sim-only">
+                        <span>Velocity (°/s, SIM)</span>
+
+                        <input
+                            type="number"
+                            min="1"
+                            max="60"
+                            value="20"
+                            id="velocity-${id}"
+                        >
+                    </label>
+
+                    <label class="field real-only">
+                        <span>Velocity (REAL - RAW)</span>
+
+                        <input
+                            type="number"
+                            min="40"
+                            max="200"
+                            step="1"
+                            value="80"
+                            id="real-speed-${id}"
+                        >
                     </label>
 
                     <label class="field">
                         <span>Zero</span>
-                        <button id="zero-${id}"
-                                style="width:100%">
+
+                        <button
+                            id="zero-${id}"
+                            style="width:100%"
+                        >
                             SETZERO
                         </button>
                     </label>
+
                 </div>
 
                 <div class="servo-buttons real-only">
+
                     <button id="minus-${id}">
                         −1 tick
                     </button>
@@ -1757,14 +2606,17 @@ function init() {
                         +1 tick
                     </button>
 
-                    <button id="move-${id}"
-                            class="primary">
+                    <button
+                        id="move-${id}"
+                        class="primary"
+                    >
                         MOVE
                     </button>
 
                     <button id="home-${id}">
                         GO ZERO
                     </button>
+
                 </div>
 
                 <div class="servo-buttons sim-only">
@@ -1772,6 +2624,7 @@ function init() {
                         MOVE ANGLE (SIM)
                     </button>
                 </div>
+
             </div>
             `
         );
@@ -1781,6 +2634,7 @@ function init() {
             `
             <label class="field">
                 <span>Servo ${id} direction</span>
+
                 <select id="dir-${id}">
                     <option value="1">+1</option>
                     <option value="-1">−1</option>
@@ -1791,6 +2645,27 @@ function init() {
 
         $("dir-" + id).value =
             geom.dirs[id - 1];
+
+        if (
+            Number.isInteger(savedSpeeds[id]) &&
+            savedSpeeds[id] >= 40 &&
+            savedSpeeds[id] <= 200
+        ) {
+            $("real-speed-" + id).value =
+                savedSpeeds[id];
+        }
+
+        $("real-speed-" + id).onchange = () => {
+            try {
+                saveSpeeds();
+            } catch (e) {
+                message(
+                    "emotion-result",
+                    e.message,
+                    true
+                );
+            }
+        };
 
         $("target-" + id).addEventListener(
             "keydown",
@@ -1804,23 +2679,35 @@ function init() {
         $("move-" + id).onclick =
             () => moveReal(id);
 
-        $("plus-" + id).onclick =
-            () => moveReal(
-                id,
-                servo(id).actual + 1
-            );
+        $("plus-" + id).onclick = () => {
+            const s = servo(id);
 
-        $("minus-" + id).onclick =
-            () => moveReal(
-                id,
-                servo(id).actual - 1
-            );
+            if (s) {
+                moveReal(
+                    id,
+                    s.actual + 1
+                );
+            }
+        };
 
-        $("home-" + id).onclick =
-            () => moveReal(
-                id,
-                servo(id).zero
-            );
+        $("minus-" + id).onclick = () => {
+            const s = servo(id);
+
+            if (s) {
+                moveReal(
+                    id,
+                    s.actual - 1
+                );
+            }
+        };
+
+        $("home-" + id).onclick = () => {
+            const s = servo(id);
+
+            if (s && s.zero !== null) {
+                moveReal(id, s.zero);
+            }
+        };
 
         $("zero-" + id).onclick =
             () => setZero([id]);
@@ -1829,19 +2716,25 @@ function init() {
             () => moveSim([id]);
     }
 
+    $("calibrated-check").checked =
+        geom.realCalibrated;
+
     syncSimFields();
 
-    for (const name of ["fk", "ik", "setup"]) {
+    // TAB BUTTONS.
+    for (const name of ["fk","ik","setup"]) {
         $("tab-" + name).onclick =
             () => showTab(name);
     }
 
+    // MODE.
     $("sim-mode").onclick =
         () => changeMode("sim");
 
     $("real-mode").onclick =
         () => changeMode("real");
 
+    // REFRESH.
     $("refresh").onclick = async () => {
         try {
             await refresh();
@@ -1854,6 +2747,7 @@ function init() {
         }
     };
 
+    // FK.
     $("fk-preview").onclick = previewFK;
     $("fk-move").onclick = () => moveSim();
 
@@ -1863,6 +2757,7 @@ function init() {
             [...simZero]
         );
 
+    // IK.
     $("ik-preview").onclick = previewIK;
     $("ik-move").onclick = moveIK;
 
@@ -1872,25 +2767,44 @@ function init() {
             [...simZero]
         );
 
+    // CANCEL.
     $("sim-cancel").onclick = () => {
         simCancelled = true;
         log("Simulation cancelled");
     };
 
-    $("cancel-real").onclick = cancelReal;
+    $("cancel-real").onclick =
+        cancelReal;
 
+    // SETUP.
     $("save-geometry").onclick =
         saveGeometry;
 
     $("zero-all").onclick =
         () => setZero(IDS);
 
+    // EMOTION.
+    $("arm-home").onclick =
+        () => emotionAction("arm");
+
+    $("disarm").onclick =
+        () => emotionAction("disarm");
+
+    $("apply-speeds").onclick =
+        () => emotionAction("speed");
+
+    $("test-emotion").onclick =
+        testEmotion;
+
     window.addEventListener(
         "resize",
         render
     );
 
-    setInterval(getStatus, 2000);
+    setInterval(
+        getStatus,
+        2000
+    );
 
     getStatus();
     render();
@@ -1898,7 +2812,622 @@ function init() {
     log("Dashboard ready");
 }
 
+
+// =====================================
+// RL_MOTION_EDITOR_V3
+// WEB MOTION EDITOR
+// =====================================
+
+let motionProfiles = {};
+
+
+function showMotion(
+    name = $("motion-name").value
+) {
+
+    const container = $("motion-rows");
+
+    container.innerHTML = "";
+
+    for (
+        const row of motionProfiles[name] || []
+    ) {
+        addMotionRow(row);
+    }
+}
+
+
+function addMotionRow(
+    values = [0, 0, 0, 0, 900]
+) {
+
+    const target = $("motion-rows");
+
+    if (target.children.length >= 12) {
+        throw Error("Maximum 12 steps");
+    }
+
+    const tr = document.createElement("tr");
+
+    tr.innerHTML = `
+        <td></td>
+
+        ${values.map((v, i) => `
+            <td>
+                <input
+                    type="number"
+                    step="1"
+                    min="${i < 4 ? -150 : 300}"
+                    max="${i < 4 ? 150 : 8000}"
+                    value="${v}"
+                >
+            </td>
+        `).join("")}
+
+        <td>
+            <button type="button">×</button>
+        </td>
+    `;
+
+    tr.querySelector("button").onclick =
+        () => {
+            tr.remove();
+            renumberMotionRows();
+        };
+
+    target.appendChild(tr);
+
+    renumberMotionRows();
+}
+
+
+function renumberMotionRows() {
+
+    [...$("motion-rows").children].forEach(
+        (tr, i) => {
+            tr.cells[0].textContent = i + 1;
+        }
+    );
+}
+
+
+function motionRows() {
+
+    const rows = [
+        ...$("motion-rows").querySelectorAll("tr")
+    ].map(tr => [
+
+        ...tr.querySelectorAll("input")
+
+    ].map(x =>
+
+        x.value.trim() === ""
+            ? NaN
+            : Number(x.value)
+    ));
+
+    if (
+        !rows.length ||
+        rows.length > 12 ||
+
+        rows.some(row =>
+
+            row.length !== 5 ||
+
+            row.some(
+                v => !Number.isInteger(v)
+            ) ||
+
+            row.slice(0, 4).some(
+                v => Math.abs(v) > 150
+            ) ||
+
+            row[4] < 300 ||
+            row[4] > 8000
+        )
+    ) {   
+    throw Error(
+        "1..12 steps; offsets -150..150; " +
+        "hold 300..8000 ms"
+);
+
+    }
+
+    return rows;
+}
+
+
+async function loadMotions() {
+
+    const resp = await fetch(
+        "/api/emotion/motions",
+        {
+            cache: "no-store"
+        }
+    );
+
+    const data = await resp.json();
+
+    if (
+        !resp.ok ||
+        !data.ok
+    ) {
+        throw Error(
+            data.error || "Load failed"
+        );
+    }
+
+    motionProfiles = data.profiles;
+
+    showMotion();
+
+    $("motion-result").textContent =
+        "โหลดท่าที่บันทึกไว้แล้ว";
+}
+
+
+async function saveMotion() {
+
+    const name = $("motion-name").value;
+
+    const frames = motionRows();
+
+    const resp = await fetch(
+        `/api/emotion/motions/${name}`,
+        {
+            method: "PUT",
+
+            headers: {
+                "Content-Type": "application/json"
+            },
+
+            body: JSON.stringify({
+                frames
+            })
+        }
+    );
+
+    const data = await resp.json();
+
+    if (
+        !resp.ok ||
+        !data.ok
+    ) {
+        throw Error(
+            data.error || "Save failed"
+        );
+    }
+
+    motionProfiles[name] = frames;
+
+    await rlSaveEmotionSpeeds(name);
+
+    $("motion-result").textContent =
+        data.note;
+
+    log(
+        `Saved ${name}: `
+        + `${frames.length} steps`
+    );
+}
+
+
+
+// =====================================
+// RL_EMOTION_SPEED_V4
+// =====================================
+
+let rlEmotionSpeedProfiles = {};
+
+
+function rlShowEmotionSpeed() {
+
+    const name = $("motion-name").value;
+
+    const values =
+        rlEmotionSpeedProfiles[name];
+
+    if (!values) return;
+
+    for (const id of IDS) {
+
+        $("emotion-speed-" + id).value =
+            values[String(id)];
+    }
+}
+
+
+async function rlLoadEmotionSpeeds() {
+
+    const response = await fetch(
+        "/api/emotion/profile-speeds",
+        {
+            cache: "no-store"
+        }
+    );
+
+    const result = await response.json();
+
+    if (!response.ok || !result.ok) {
+        throw Error(
+            result.error ||
+            "Unable to load emotion speeds"
+        );
+    }
+
+    rlEmotionSpeedProfiles =
+        result.profiles;
+
+    rlShowEmotionSpeed();
+
+    $("emotion-speed-result").textContent =
+        "Saved speed settings loaded";
+}
+
+
+async function rlSaveEmotionSpeeds(name) {
+
+    const speeds = {};
+
+    for (const id of IDS) {
+
+        const element =
+            $("emotion-speed-" + id);
+
+        const text =
+            element.value.trim();
+
+        const value =
+            Number(text);
+
+        if (
+            text === "" ||
+            !Number.isInteger(value) ||
+            value < 40 ||
+            value > 200
+        ) {
+            throw Error(
+                "Servo " + id +
+                " velocity must be 40..200 RAW"
+            );
+        }
+
+        speeds[String(id)] = value;
+    }
+
+    const response = await fetch(
+        "/api/emotion/profile-speeds/"
+        + encodeURIComponent(name),
+        {
+            method: "PUT",
+
+            headers: {
+                "Content-Type":
+                    "application/json"
+            },
+
+            body: JSON.stringify({
+                speeds
+            })
+        }
+    );
+
+    const result = await response.json();
+
+    if (!response.ok || !result.ok) {
+        throw Error(
+            result.error ||
+            "Unable to save emotion speeds"
+        );
+    }
+
+    rlEmotionSpeedProfiles[name] =
+        speeds;
+
+    $("emotion-speed-result").textContent =
+        name +
+        ": speeds saved permanently";
+}
+
+
+function rlInitEmotionSpeedEditor() {
+
+    for (const id of IDS) {
+
+        $("emotion-speed-fields")
+        .insertAdjacentHTML(
+            "beforeend",
+
+            `<label class="field">
+                <span>Servo ${id} (RAW)</span>
+
+                <input
+                    type="number"
+                    id="emotion-speed-${id}"
+                    min="40"
+                    max="200"
+                    step="1"
+                    value="80"
+                >
+            </label>`
+        );
+    }
+
+    $("motion-name").addEventListener(
+        "change",
+        rlShowEmotionSpeed
+    );
+
+    $("motion-save").textContent =
+        "SAVE MOTION + SPEED";
+
+    rlLoadEmotionSpeeds().catch(
+        err => {
+            $("emotion-speed-result")
+                .textContent = err.message;
+        }
+    );
+}
+
+
+function initMotionEditor() {
+
+    $("motion-name").onchange =
+        () => showMotion();
+
+    $("motion-add").onclick = () => {
+
+        try {
+            addMotionRow();
+        }
+
+        catch (e) {
+            $("motion-result").textContent =
+                e.message;
+        }
+    };
+
+    $("motion-save").onclick = async () => {
+
+        try {
+            await saveMotion();
+        }
+
+        catch (e) {
+            $("motion-result").textContent =
+                e.message;
+        }
+    };
+
+    $("motion-reload").onclick = () => {
+
+        loadMotions().catch(e => {
+
+            $("motion-result").textContent =
+                e.message;
+        });
+    };
+
+    loadMotions().catch(e => {
+
+        $("motion-result").textContent =
+            e.message;
+    });
+}
+
 init();
+initMotionEditor();
+rlInitEmotionSpeedEditor();
+
 </script>
+
+<!-- ===================================
+     HORMONE MONITORING JAVASCRIPT
+     READ ONLY
+=================================== -->
+
+<script>
+(() => {
+    "use strict";
+
+    const emotions = [
+        "HAPPY",
+        "SLEEPY",
+        "SURPRISED",
+        "SAD"
+    ];
+
+    const el = id =>
+        document.getElementById(id);
+
+    const format = v =>
+        Number.isFinite(Number(v))
+            ? Number(v).toFixed(3)
+            : "-";
+
+    function createBars(
+        containerId,
+        prefix
+    ) {
+        const container = el(containerId);
+
+        for (const emotion of emotions) {
+            const item =
+                document.createElement("div");
+
+            item.className = "rl-item";
+
+            item.innerHTML = `
+                <div class="rl-label">
+                    <span>${emotion}</span>
+
+                    <span id="${prefix}-value-${emotion}">
+                        0.000
+                    </span>
+                </div>
+
+                <div class="rl-track">
+                    <div
+                        class="rl-fill"
+                        id="${prefix}-bar-${emotion}"
+                    ></div>
+                </div>
+            `;
+
+            container.appendChild(item);
+        }
+    }
+
+    createBars(
+        "rl-hormone-bars",
+        "rl-h"
+    );
+
+    createBars(
+        "rl-receptor-bars",
+        "rl-r"
+    );
+
+    function updateBars(
+        prefix,
+        values
+    ) {
+        for (const emotion of emotions) {
+            const raw = Number(
+                values?.[emotion]
+            );
+
+            const v =
+                Number.isFinite(raw)
+                    ? raw
+                    : 0;
+
+            el(
+                `${prefix}-value-${emotion}`
+            ).textContent =
+                v.toFixed(3);
+
+            el(
+                `${prefix}-bar-${emotion}`
+            ).style.width =
+                `${
+                    Math.max(
+                        0,
+                        Math.min(1, v)
+                    ) * 100
+                }%`;
+        }
+    }
+
+    let fetching = false;
+
+    async function updateMonitor() {
+        if (fetching) return;
+
+        fetching = true;
+
+        try {
+            const response = await fetch(
+                "/api/monitor/hormone",
+                { cache: "no-store" }
+            );
+
+            const data =
+                await response.json();
+
+            if (
+                !response.ok ||
+                !data.ok
+            ) {
+                throw Error(
+                    data.error ||
+                    "Monitoring unavailable"
+                );
+            }
+
+            const status =
+                el("rl-monitor-status");
+
+            status.textContent =
+                data.data_status === "LIVE"
+                    ? "● LIVE - Camera Data Updating"
+                    : "⚠ STALE DATA - No new data for " +
+                      Number(
+                          data.data_age_s
+                      ).toFixed(1) +
+                      " seconds";
+
+            status.style.color =
+                data.data_status === "LIVE"
+                    ? "#76e7c4"
+                    : "#ffd18a";
+
+            for (const [field, key] of [
+                ["emotion", "emotion"],
+                ["brain", "brain"],
+                ["gesture", "gesture"],
+                ["mode", "mode"]
+            ]) {
+                el(
+                    "rl-" + field
+                ).textContent =
+                    data[key];
+            }
+
+            for (const k of [
+                "curiosity",
+                "energy",
+                "arousal"
+            ]) {
+                el(
+                    "rl-" + k
+                ).textContent =
+                    format(data[k]);
+            }
+
+            el(
+                "rl-sample-time"
+            ).textContent =
+                format(
+                    data.sample_time_s
+                ) + " s";
+
+            updateBars(
+                "rl-h",
+                data.hormone
+            );
+
+            updateBars(
+                "rl-r",
+                data.receptor
+            );
+
+        } catch (e) {
+            el(
+                "rl-monitor-status"
+            ).textContent =
+                "✕ API ERROR - " +
+                e.message;
+
+            el(
+                "rl-monitor-status"
+            ).style.color =
+                "#ff9da6";
+
+        } finally {
+            fetching = false;
+        }
+    }
+
+    updateMonitor();
+
+    setInterval(
+        updateMonitor,
+        1000
+    );
+
+})();
+</script>
+
 </body>
 </html>

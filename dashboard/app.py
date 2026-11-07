@@ -1,15 +1,19 @@
 
-"""Robot Lamp Dashboard - Direct Target Ticks.
-ESP32 V1.8 / SCS15 Servo ID 1-4 / COM3 / 115200.
+"""
+Robot Lamp Flask Dashboard
+ESP32 / SCS15 Servo IDs 1-4
+COM3 / 115200 baud
 
-Fixed:
-- READPOS / READINFO accept 4 servo responses
-- MOVE OK accepts responses with or without SPEED
-- Step-by-step movement with actual feedback
-- Software SETZERO
-- Cancel future movement steps
+- FK / IK Dashboard
+- Software Zero
+- Direct MOVE up to 300 ticks
+- Independent servo speeds
+- Emotion ARM from saved Home
+- Camera / Emotion HTTP bridge
+- Hormone Monitoring API
 """
 
+import csv
 import json
 import re
 import threading
@@ -19,27 +23,189 @@ from pathlib import Path
 import serial
 from flask import Flask, jsonify, request, send_file
 
-
 # ==========================================
-# 1. CONFIGURATION
+# CONFIGURATION
 # ==========================================
 
 BASE = Path(__file__).resolve().parent
 
 PORT = "COM3"
 BAUD = 115200
-SERVO_HARDWARE_ENABLED = False
+
 IDS = (1, 2, 3, 4)
+SERVO_HARDWARE_ENABLED = True
 
 ZERO_FILE = BASE / "servo_zeros.json"
 HTML_FILE = BASE / "templates" / "index.html"
 
 MARGIN = 20
-STEP = 20
-TOLERANCE = 1
+TOLERANCE = 10
 
-STEP_TIMEOUT = 8
-TOTAL_TIMEOUT = 120
+DIRECT_MOVE_MAX_DELTA = 300
+DIRECT_MOVE_TIMEOUT = 15.0
+
+SPEED_MIN = 40
+SPEED_MAX = 200
+
+EMOTIONS = (
+    "IDLE",
+    "HAPPY",
+    "SURPRISED",
+    "SAD",
+    "SLEEPY",
+)
+
+# CURIO is autonomous behavior, not a fifth emotion.
+BEHAVIORS = ("CURIO",)
+VALID_COMMANDS = EMOTIONS + BEHAVIORS
+
+
+# ==========================================
+# RL_MOTION_EDITOR_V3
+# SAVED MOTION PROFILES
+# ==========================================
+
+MOTION_FILE = BASE / "emotion_motion.json"
+
+MOTION_NAMES = (
+    "HAPPY",
+    "SURPRISED",
+    "SAD",
+    "SLEEPY",
+    "CURIO"
+)
+
+MOTION_COMMANDS = EMOTIONS + ("CURIO",)
+
+DEFAULT_MOTIONS = {
+
+    "HAPPY": [
+        [-12, 8, 8, 0, 1000],
+        [12, -8, -8, 0, 1000],
+        [-12, 8, 8, 0, 1000],
+        [0, 0, 0, 0, 1200]
+    ],
+
+    "SURPRISED": [
+        [0, 0, 0, 0, 300],
+        [-28, 28, -20, 20, 400],
+        [0, 0, 0, 0, 600]
+    ],
+
+    "SAD": [
+        [0, -25, 15, 0, 1200],
+        [0, 0, 0, 0, 800]
+    ],
+
+    "SLEEPY": [
+        [0, -18, 18, 0, 1600],
+        [0, -25, 25, 0, 1600],
+        [0, 0, 0, 0, 1200]
+    ],
+
+    "CURIO": [
+        [0, 0, 0, 0, 600],
+        [-30, 0, 0, 0, 1000],
+        [0, 0, 0, 0, 350],
+        [30, 0, 0, 0, 1000],
+        [0, 0, 0, 0, 350],
+        [0, -25, 0, 0, 1000],
+        [0, 0, 0, 0, 350],
+        [0, 25, 0, 0, 1000],
+        [0, 0, 0, 0, 950]
+    ]
+}
+
+motion_lock = threading.RLock()
+
+motion_profiles = {}
+motion_synced = set()
+
+
+def validate_motion(name, frames):
+
+    if (
+        name not in MOTION_NAMES
+        or not isinstance(frames, list)
+        or not 1 <= len(frames) <= 12
+    ):
+        raise ValueError(
+            "Select a valid name and 1..12 frames"
+        )
+
+    for row in frames:
+
+        if (
+            not isinstance(row, list)
+            or len(row) != 5
+            or any(
+                type(v) is not int
+                for v in row
+            )
+            or any(
+                abs(v) > 150
+                for v in row[:4]
+            )
+            or not 300 <= row[4] <= 8000
+        ):
+            raise ValueError(
+                "Frame: four offsets (-150..150), "
+                "hold 300..8000 ms"
+            )
+
+    return frames
+
+
+def load_motions():
+
+    try:
+        stored = json.loads(
+            MOTION_FILE.read_text(
+                encoding="utf-8"
+            )
+        )
+
+        if not isinstance(stored, dict):
+            stored = {}
+
+    except (OSError, ValueError):
+        stored = {}
+
+    for name in MOTION_NAMES:
+
+        try:
+            motion_profiles[name] = validate_motion(
+                name,
+                stored.get(
+                    name,
+                    DEFAULT_MOTIONS[name]
+                )
+            )
+
+        except ValueError:
+            motion_profiles[name] = (
+                DEFAULT_MOTIONS[name]
+            )
+
+
+def save_motions():
+
+    temp = MOTION_FILE.with_suffix(
+        ".json.tmp"
+    )
+
+    temp.write_text(
+        json.dumps(
+            motion_profiles,
+            indent=2
+        ),
+        encoding="utf-8"
+    )
+
+    temp.replace(MOTION_FILE)
+
+
+load_motions()
 
 app = Flask(__name__)
 
@@ -49,9 +215,8 @@ cancel_event = threading.Event()
 
 port = None
 
-
 # ==========================================
-# 2. SERVO STATES
+# SERVO STATES
 # ==========================================
 
 servos = {
@@ -63,7 +228,8 @@ servos = {
         voltage=None,
         temperature=None,
         online=False,
-        zero=None
+        zero=None,
+        speed=80
     )
     for i in IDS
 }
@@ -74,12 +240,13 @@ state = dict(
     busy=False,
     error=None,
     position_at=0.0,
-    info_at=0.0
+    info_at=0.0,
+    emotion_armed=False,
+    emotion="IDLE"
 )
 
-
 # ==========================================
-# 3. ESP32 RESPONSE PATTERNS
+# ESP32 RESPONSE PATTERNS
 # ==========================================
 
 POS_RE = re.compile(
@@ -91,18 +258,13 @@ INFO_RE = re.compile(
     r"VOLTAGE=([\d.]+) TEMP=(\d+)$"
 )
 
-# Supports both:
-# [MOVE OK] ID=4 FROM=304 TARGET=284
-# [MOVE OK] ID=4 FROM=304 TARGET=284 SPEED=80
-
 MOVE_RE = re.compile(
-    r"^\[MOVE OK\]\s+ID=(\d+)\s+FROM=(\d+)\s+"
-    r"TARGET=(\d+)(?:\s+SPEED=(\d+))?$"
+    r"^\[MOVE OK\] ID=(\d+) FROM=(\d+) "
+    r"TARGET=(\d+)(?: SPEED=(\d+))?$"
 )
 
-
 # ==========================================
-# 4. LOAD / SAVE SOFTWARE ZERO
+# LOAD / SAVE SOFTWARE ZERO
 # ==========================================
 
 def load_zeros():
@@ -111,14 +273,15 @@ def load_zeros():
             ZERO_FILE.read_text(encoding="utf-8")
         )
 
-        for i in IDS:
-            value = data.get(str(i))
+        with state_lock:
+            for i in IDS:
+                value = data.get(str(i))
 
-            if (
-                type(value) is int
-                and 0 <= value <= 1023
-            ):
-                servos[i]["zero"] = value
+                if (
+                    type(value) is int
+                    and 0 <= value <= 1023
+                ):
+                    servos[i]["zero"] = value
 
     except (
         OSError,
@@ -136,7 +299,9 @@ def save_zeros():
         if servos[i]["zero"] is not None
     }
 
-    temp = ZERO_FILE.with_suffix(".json.tmp")
+    temp = ZERO_FILE.with_suffix(
+        ".json.tmp"
+    )
 
     temp.write_text(
         json.dumps(data, indent=2),
@@ -145,29 +310,15 @@ def save_zeros():
 
     temp.replace(ZERO_FILE)
 
-
 # ==========================================
-# 5. SERIAL TRANSACTION
+# SERIAL CONNECTION
 # ==========================================
 
-def transact(command, timeout):
-    """
-    READPOS:
-        Complete when all four IDs respond.
-
-    READINFO:
-        Complete when all four IDs respond.
-
-    MOVE:
-        Complete when MOVE OK is received,
-        with or without SPEED.
-
-    Caller must hold serial_lock.
-    """
-
+def open_port():
     global port
 
     if port is None or not port.is_open:
+        motion_synced.clear()
         port = serial.Serial(
             PORT,
             BAUD,
@@ -175,7 +326,18 @@ def transact(command, timeout):
             write_timeout=0.8
         )
 
+        # ESP32 may reset when COM opens.
         time.sleep(1.8)
+
+
+def transact(command, timeout=5):
+    """
+    Send one command to ESP32.
+
+    Caller MUST hold serial_lock.
+    """
+
+    open_port()
 
     port.reset_input_buffer()
 
@@ -188,7 +350,7 @@ def transact(command, timeout):
     deadline = time.monotonic() + timeout
 
     lines = []
-    found = set()
+    seen = set()
 
     while time.monotonic() < deadline:
         raw = port.readline()
@@ -205,64 +367,99 @@ def transact(command, timeout):
             continue
 
         lines.append(line)
-        lines = lines[-70:]
+        lines = lines[-80:]
 
-        # READPOS
+        # Error responses.
+        if (
+            line.startswith("[ERROR]")
+            or line.startswith("[SAFE]")
+            or line.startswith("[ARM REJECTED]")
+            or line.startswith("[MOVE REJECT]")
+            or line.startswith("[MOVE ERROR]")
+            or line.startswith("[EMOTION ERROR]")
+        ):
+            if command not in (
+                "READPOS",
+                "READINFO"
+            ):
+                raise RuntimeError(line)
+
+        # READPOS.
         if command == "READPOS":
             match = POS_RE.fullmatch(line)
 
             if match and int(match[1]) in IDS:
-                found.add(int(match[1]))
+                seen.add(int(match[1]))
 
-            if len(found) == len(IDS):
+            if len(seen) == len(IDS):
                 return lines
 
-        # READINFO
+        # READINFO.
         elif command == "READINFO":
             match = INFO_RE.fullmatch(line)
 
             if match and int(match[1]) in IDS:
-                found.add(int(match[1]))
+                seen.add(int(match[1]))
 
-            if len(found) == len(IDS):
+            if len(seen) == len(IDS):
                 return lines
 
-        # MOVE
+        # MOVE.
         elif command.startswith("MOVE "):
-
             if MOVE_RE.fullmatch(line):
                 return lines
 
-            if (
-                "[MOVE ERROR]" in line
-                or "[MOVE FAIL]" in line
+        # SPEED.
+        elif command.startswith("SPEED "):
+            if line.startswith("[SPEED OK]"):
+                return lines
+
+        # ARM with Dashboard Home.
+        elif command.startswith("ARM HOME "):
+            if line.startswith(
+                "[EMOTION] ARMED HOME"
             ):
-                raise RuntimeError(
-                    "ESP32 refused MOVE: " + line
-                )
+                return lines
+
+        # DISARM.
+        elif command == "DISARM":
+            if line == "[EMOTION] DISARMED":
+                return lines
+
+        # EMOTION / CURIO.
+        elif command.startswith(("KFB ", "KFF ", "KFC ")):
+            if line.startswith("[KF OK]"):
+                return lines
+
+        elif command in MOTION_COMMANDS:
+            if line.startswith(
+                f"[EMOTION] {command} |"
+            ):
+                return lines
+
+        elif command == "STATUS":
+            if line.startswith("[STATUS]"):
+                return lines
 
     raise TimeoutError(
-        f"{command} timeout; "
-        f"received={lines[-10:]}"
+        f"{command}: no complete response; "
+        f"{lines[-8:]}"
     )
 
-
 # ==========================================
-# 6. READ ACTUAL POSITIONS
+# READ ACTUAL POSITIONS
 # ==========================================
 
 def read_positions():
     lines = transact("READPOS", 8)
 
-    found = {}
+    found = {
+        int(match[1]): int(match[2])
+        for line in lines
+        if (match := POS_RE.fullmatch(line))
+    }
 
-    for line in lines:
-        match = POS_RE.fullmatch(line)
-
-        if match and int(match[1]) in IDS:
-            found[int(match[1])] = int(match[2])
-
-    if len(found) != len(IDS):
+    if any(i not in found for i in IDS):
         raise RuntimeError(
             "Missing position feedback"
         )
@@ -275,28 +472,25 @@ def read_positions():
         state["connected"] = True
         state["position_at"] = time.monotonic()
 
-
 # ==========================================
-# 7. READ SERVO INFORMATION
+# READ SERVO INFORMATION
 # ==========================================
 
 def read_info():
     lines = transact("READINFO", 15)
 
-    found = {}
+    found = {
+        int(match[1]): (
+            int(match[2]),
+            int(match[3]),
+            float(match[4]),
+            int(match[5])
+        )
+        for line in lines
+        if (match := INFO_RE.fullmatch(line))
+    }
 
-    for line in lines:
-        match = INFO_RE.fullmatch(line)
-
-        if match and int(match[1]) in IDS:
-            found[int(match[1])] = (
-                int(match[2]),
-                int(match[3]),
-                float(match[4]),
-                int(match[5])
-            )
-
-    if len(found) != len(IDS):
+    if any(i not in found for i in IDS):
         raise RuntimeError(
             "Missing servo information"
         )
@@ -315,9 +509,8 @@ def read_info():
         state["info_ready"] = True
         state["info_at"] = time.monotonic()
 
-
 # ==========================================
-# 8. REFRESH SERVO
+# REFRESH SERVO
 # ==========================================
 
 def refresh(force_info=False):
@@ -325,16 +518,16 @@ def refresh(force_info=False):
 
     if (
         force_info
-        or time.monotonic() - state["info_at"] > 30
+        or time.monotonic()
+        - state["info_at"] > 30
     ):
         read_info()
 
     with state_lock:
         state["error"] = None
 
-
 # ==========================================
-# 9. VALIDATE SERVO FEEDBACK
+# VALIDATE FEEDBACK
 # ==========================================
 
 def checked_servo(i, target=None):
@@ -348,30 +541,32 @@ def checked_servo(i, target=None):
         )
 
         fresh = (
-            time.monotonic() - state["position_at"] < 8
-            and time.monotonic() - state["info_at"] < 70
+            time.monotonic()
+            - state["position_at"] < 8
+            and time.monotonic()
+            - state["info_at"] < 70
         )
 
     if not ready or not fresh:
         raise ValueError(
-            "Servo feedback missing or stale"
+            f"Servo {i}: feedback missing/stale"
         )
 
-    actual = s["actual"]
+    pos = s["actual"]
     low = s["min"]
     high = s["max"]
 
     if (
         not all(
             type(v) is int
-            for v in (actual, low, high)
+            for v in (pos, low, high)
         )
         or not (
-            0 <= low <= actual <= high <= 1023
+            0 <= low <= pos <= high <= 1023
         )
     ):
         raise ValueError(
-            "Invalid actual ticks or servo limits"
+            f"Servo {i}: invalid ticks/limits"
         )
 
     if (
@@ -379,7 +574,7 @@ def checked_servo(i, target=None):
         or not 6.5 <= s["voltage"] <= 8.4
     ):
         raise ValueError(
-            "Servo voltage outside configured limits"
+            f"Servo {i}: voltage out of range"
         )
 
     if (
@@ -387,7 +582,7 @@ def checked_servo(i, target=None):
         or s["temperature"] >= 55
     ):
         raise ValueError(
-            "Servo temperature too high"
+            f"Servo {i}: temperature too high"
         )
 
     if target is not None:
@@ -397,23 +592,20 @@ def checked_servo(i, target=None):
             <= high - MARGIN
         ):
             raise ValueError(
-                f"Target must be "
-                f"{low + MARGIN}..{high - MARGIN} ticks"
+                f"Servo {i}: target must be "
+                f"{low+MARGIN}..{high-MARGIN}"
             )
 
     return s
 
-
 # ==========================================
-# 10. BACKGROUND POLLING
+# BACKGROUND POLLING
 # ==========================================
 
 def background_poll():
     global port
 
     while True:
-
-        # ยังไม่ต่อ Servo ไม่ต้องส่ง READPOS / READINFO
         if not SERVO_HARDWARE_ENABLED:
             time.sleep(2)
             continue
@@ -429,180 +621,561 @@ def background_poll():
                     info_ready=False,
                     position_at=0.0,
                     info_at=0.0,
-                    error=str(exc)
+                    error=str(exc),
+                    emotion_armed=False
                 )
 
                 for i in IDS:
                     servos[i]["online"] = False
 
-        with serial_lock:
-             try:
-                 if port is not None:
-                     port.close()
-             except Exception:
-                 pass
+            with serial_lock:
+                try:
+                    if port is not None:
+                        port.close()
+                except Exception:
+                    pass
 
-             port = None
+                port = None
 
         time.sleep(2)
 
-
 # ==========================================
-# 11. MOVE SERVO TO TARGET TICKS
+# REAL SERVO MOVE
 # ==========================================
 
-def move_absolute(i, target):
+def move_absolute(
+    i,
+    target,
+    speed=80
+):
     """
-    Move one servo using small steps.
-
-    Each step is verified using real
-    position feedback from the ESP32.
-
-    This is not collision-aware planning.
+    Direct movement:
+    - One MOVE command.
+    - Maximum 300 ticks.
+    - Verify actual feedback.
+    - No automatic intermediate moves.
     """
 
-    started = time.monotonic()
+    if cancel_event.is_set():
+        raise RuntimeError(
+            "Cancelled before MOVE"
+        )
 
     refresh(force_info=True)
 
-    before = checked_servo(
-        i,
-        target
-    )["actual"]
+    s = checked_servo(i, target)
+    before = s["actual"]
 
-    sent_any = False
-    firmware_speed = None
+    distance = abs(target - before)
 
-    while (
-        time.monotonic() - started
-        < TOTAL_TIMEOUT
+    if distance > DIRECT_MOVE_MAX_DELTA:
+        raise ValueError(
+            f"Servo {i}: {distance} ticks "
+            f"exceeds {DIRECT_MOVE_MAX_DELTA}; "
+            "no command sent"
+        )
+
+    if distance == 0:
+        return dict(
+            id=i,
+            before=before,
+            target=target,
+            actual=before,
+            reached=True,
+            firmware_speed=speed
+        )
+
+    if cancel_event.is_set():
+        raise RuntimeError(
+            "Cancelled before MOVE"
+        )
+
+    # MCU disarms emotion before manual MOVE.
+    with state_lock:
+        state["emotion_armed"] = False
+
+    lines = transact(
+        f"MOVE {i} {target} {speed}",
+        8
+    )
+
+    match = next(
+        (
+            match
+            for line in lines
+            if (match := MOVE_RE.fullmatch(line))
+        ),
+        None
+    )
+
+    if (
+        not match
+        or int(match[1]) != i
+        or int(match[3]) != target
     ):
+        raise RuntimeError(
+            f"Unexpected MOVE response: {lines[-8:]}"
+        )
 
-        if cancel_event.is_set():
-            raise RuntimeError(
-                "Cancelled next steps "
-                "(NOT hardware E-stop)"
-            )
+    firmware_speed = (
+        int(match[4])
+        if match[4]
+        else speed
+    )
+
+    deadline = (
+        time.monotonic()
+        + DIRECT_MOVE_TIMEOUT
+    )
+
+    actual = before
+
+    while time.monotonic() < deadline:
+        time.sleep(0.25)
 
         read_positions()
 
-        s = checked_servo(i, target)
-        actual = s["actual"]
+        actual = checked_servo(i)["actual"]
 
-        difference = target - actual
-
-        # Target reached or within tolerance
-        if (
-            difference == 0
-            or (
-                sent_any
-                and abs(difference) <= TOLERANCE
-            )
-        ):
+        if abs(actual - target) <= TOLERANCE:
             return dict(
                 id=i,
                 before=before,
                 target=target,
                 actual=actual,
-                reached=(
-                    abs(difference) <= TOLERANCE
-                ),
+                reached=True,
                 firmware_speed=firmware_speed
             )
 
-        step = min(
-            abs(difference),
-            STEP
-        )
-
-        next_target = actual + (
-            step if difference > 0 else -step
-        )
-
-        checked_servo(i, next_target)
-
-        # Send MOVE to ESP32
-        lines = transact(
-            f"MOVE {i} {next_target}",
-            8
-        )
-
-        match = next(
-            (
-                m
-                for line in lines
-                if (m := MOVE_RE.fullmatch(line))
-            ),
-            None
-        )
-
-        if (
-            not match
-            or int(match[1]) != i
-            or int(match[3]) != next_target
-        ):
-            raise RuntimeError(
-                "Unexpected MOVE response: "
-                + str(lines[-6:])
-            )
-
-        # IMPORTANT FIX:
-        # SPEED may be missing in ESP32 response.
-
-        firmware_speed = (
-            int(match.group(4))
-            if match.group(4) is not None
-            else None
-        )
-
-        sent_any = True
-
-        # Verify physical feedback
-        tolerance = (
-            0 if step <= 2
-            else TOLERANCE
-        )
-
-        step_started = time.monotonic()
-
-        while (
-            time.monotonic() - step_started
-            < STEP_TIMEOUT
-        ):
-
-            if cancel_event.is_set():
-                raise RuntimeError(
-                    "Cancelled next steps; "
-                    "current motor may still move"
-                )
-
-            time.sleep(0.2)
-
-            read_positions()
-
-            position = checked_servo(i)["actual"]
-
-            if (
-                abs(position - next_target)
-                <= tolerance
-            ):
-                break
-
-        else:
-            raise TimeoutError(
-                f"Servo {i} did not reach "
-                f"{next_target} ticks; "
-                "refresh Actual before retrying"
-            )
-
     raise TimeoutError(
-        "Total move timeout; "
-        "refresh Actual before retrying"
+        f"Servo {i} target {target}, "
+        f"last actual={actual}; "
+        "command sent only once"
     )
+
+# ==========================================
+# EMOTION SPEEDS
+# ==========================================
 
 
 # ==========================================
-# 12. FLASK API
+# PERSISTENT MOTION EDITOR ROUTES
+# ==========================================
+
+def motion_safe_at_home(name, frames):
+
+    # Check saved Home and hardware limits.
+    with state_lock:
+
+        for i in IDS:
+
+            s = servos[i]
+
+            if all(
+                type(s.get(k)) is int
+                for k in ("zero", "min", "max")
+            ):
+
+                for row in frames:
+
+                    target = (
+                        s["zero"] +
+                        row[i - 1]
+                    )
+
+                    if not (
+                        s["min"] + MARGIN
+                        <= target
+                        <= s["max"] - MARGIN
+                    ):
+                        raise ValueError(
+                            f"{name} Servo {i}: "
+                            f"target {target} "
+                            "exceeds safe limit"
+                        )
+
+
+def sync_motion(name):
+
+    # Caller holds serial_lock.
+    # No servo movement during configuration.
+
+    if name in motion_synced:
+        return
+
+    with motion_lock:
+        frames = [
+            row[:]
+            for row in motion_profiles[name]
+        ]
+
+    motion_safe_at_home(
+        name,
+        frames
+    )
+
+    transact(
+        f"KFB {name} {len(frames)}",
+        5
+    )
+
+    for index, frame in enumerate(frames):
+
+        transact(
+            "KFF "
+            + name
+            + " "
+            + str(index)
+            + " "
+            + " ".join(map(str, frame)),
+            5
+        )
+
+    transact(
+        f"KFC {name}",
+        5
+    )
+
+    motion_synced.add(name)
+
+
+@app.get("/api/emotion/motions")
+def api_motion_get():
+
+    with motion_lock:
+
+        return jsonify(
+            ok=True,
+            profiles=motion_profiles,
+            names=MOTION_NAMES
+        )
+
+
+@app.put("/api/emotion/motions/<name>")
+def api_motion_put(name):
+
+    data = request.get_json(
+        silent=True
+    ) or {}
+
+    try:
+        frames = validate_motion(
+            name,
+            data.get("frames")
+        )
+
+        motion_safe_at_home(
+            name,
+            frames
+        )
+
+        with motion_lock:
+
+            motion_profiles[name] = [
+                row[:]
+                for row in frames
+            ]
+
+            save_motions()
+            motion_synced.discard(name)
+
+        # SAVE never starts servo movement.
+
+        with state_lock:
+            can_sync = (
+                state["connected"]
+                and not state["busy"]
+            )
+
+        synced = False
+
+        note = (
+            "Saved on PC; will upload "
+            "at next ARM or TEST"
+        )
+
+        if can_sync:
+
+            try:
+                with serial_lock:
+                    sync_motion(name)
+
+                synced = True
+
+                note = (
+                    "Saved on PC and uploaded "
+                    "to ESP32 (no movement)"
+                )
+
+            except Exception as exc:
+
+                note = (
+                    "Saved on PC; "
+                    "upload pending: "
+                    + str(exc)
+                )
+
+        return jsonify(
+            ok=True,
+            saved=True,
+            applied=synced,
+            note=note
+        )
+
+    except (ValueError, TypeError) as exc:
+
+        return jsonify(
+            ok=False,
+            error=str(exc)
+        ), 400
+
+
+# ==========================================
+# RL_EMOTION_SPEED_V4
+# PERSISTENT SPEED PER EMOTION
+# ==========================================
+
+EMOTION_SPEED_FILE = (
+    BASE / "emotion_speeds.json"
+)
+
+SPEED_PROFILE_NAMES = (
+    "HAPPY",
+    "SURPRISED",
+    "SAD",
+    "SLEEPY",
+    "CURIO",
+)
+
+SPEED_PROFILE_DEFAULTS = {
+    "HAPPY": {
+        "1": 85, "2": 85,
+        "3": 80, "4": 75
+    },
+
+    "SURPRISED": {
+        "1": 100, "2": 100,
+        "3": 90, "4": 85
+    },
+
+    "SAD": {
+        "1": 60, "2": 55,
+        "3": 55, "4": 55
+    },
+
+    "SLEEPY": {
+        "1": 40, "2": 40,
+        "3": 40, "4": 40
+    },
+
+    "CURIO": {
+        "1": 65, "2": 60,
+        "3": 50, "4": 50
+    },
+}
+
+emotion_speed_lock = threading.RLock()
+
+
+def validate_emotion_speeds(speeds):
+
+    if not isinstance(speeds, dict):
+        raise ValueError(
+            "speeds must be an object"
+        )
+
+    result = {}
+
+    for sid in IDS:
+
+        value = speeds.get(str(sid))
+
+        if (
+            type(value) is not int
+            or not SPEED_MIN <= value <= SPEED_MAX
+        ):
+            raise ValueError(
+                f"Servo {sid}: speed must be "
+                f"{SPEED_MIN}..{SPEED_MAX} RAW"
+            )
+
+        result[str(sid)] = value
+
+    return result
+
+
+def load_emotion_speeds():
+
+    try:
+        stored = json.loads(
+            EMOTION_SPEED_FILE.read_text(
+                encoding="utf-8"
+            )
+        )
+
+        if not isinstance(stored, dict):
+            stored = {}
+
+    except (OSError, ValueError):
+        stored = {}
+
+    result = {}
+
+    for name in SPEED_PROFILE_NAMES:
+
+        try:
+            result[name] = validate_emotion_speeds(
+                stored.get(
+                    name,
+                    SPEED_PROFILE_DEFAULTS[name]
+                )
+            )
+
+        except ValueError:
+            result[name] = (
+                SPEED_PROFILE_DEFAULTS[name].copy()
+            )
+
+    return result
+
+
+emotion_speed_profiles = load_emotion_speeds()
+
+
+@app.get("/api/emotion/profile-speeds")
+def api_get_emotion_profile_speeds():
+
+    with emotion_speed_lock:
+
+        return jsonify(
+            ok=True,
+            profiles={
+                name: dict(values)
+                for name, values
+                in emotion_speed_profiles.items()
+            }
+        )
+
+
+@app.put("/api/emotion/profile-speeds/<name>")
+def api_put_emotion_profile_speeds(name):
+
+    if name not in SPEED_PROFILE_NAMES:
+        return jsonify(
+            ok=False,
+            error="Unknown profile"
+        ), 404
+
+    try:
+        payload = request.get_json(
+            silent=True
+        ) or {}
+
+        values = validate_emotion_speeds(
+            payload.get("speeds")
+        )
+
+        with emotion_speed_lock:
+
+            updated = {
+                key: dict(value)
+                for key, value
+                in emotion_speed_profiles.items()
+            }
+
+            updated[name] = values
+
+            temp = EMOTION_SPEED_FILE.with_suffix(
+                ".json.tmp"
+            )
+
+            temp.write_text(
+                json.dumps(
+                    updated,
+                    indent=2
+                ),
+                encoding="utf-8"
+            )
+
+            temp.replace(
+                EMOTION_SPEED_FILE
+            )
+
+            emotion_speed_profiles.clear()
+            emotion_speed_profiles.update(
+                updated
+            )
+
+        return jsonify(
+            ok=True,
+            name=name,
+            speeds=values,
+            note=(
+                "Saved permanently. "
+                "Applied on next emotion command."
+            )
+        )
+
+    except (ValueError, TypeError) as exc:
+        return jsonify(
+            ok=False,
+            error=str(exc)
+        ), 400
+
+    except OSError as exc:
+        return jsonify(
+            ok=False,
+            error=str(exc)
+        ), 500
+
+
+def parse_speeds(payload):
+    values = payload.get("speeds")
+
+    if not isinstance(values, dict):
+        raise ValueError(
+            "speeds must be an object with 1..4"
+        )
+
+    speeds = {}
+
+    for i in IDS:
+        v = values.get(
+            str(i),
+            values.get(i)
+        )
+
+        if (
+            type(v) is not int
+            or not SPEED_MIN <= v <= SPEED_MAX
+        ):
+            raise ValueError(
+                f"Servo {i}: speed must be "
+                f"{SPEED_MIN}..{SPEED_MAX} RAW"
+            )
+
+        speeds[i] = v
+
+    return speeds
+
+
+def apply_speeds(speeds):
+    """
+    Caller holds serial_lock.
+    Each Servo has its own emotion speed.
+    """
+
+    for i in IDS:
+        transact(
+            f"SPEED {i} {speeds[i]}",
+            4
+        )
+
+        with state_lock:
+            servos[i]["speed"] = speeds[i]
+
+# ==========================================
+# FLASK ROUTES
 # ==========================================
 
 @app.after_request
@@ -618,9 +1191,8 @@ def no_cache(response):
 def home():
     return send_file(HTML_FILE)
 
-
 # ==========================================
-# 13. STATUS API
+# STATUS API
 # ==========================================
 
 @app.get("/api/status")
@@ -628,19 +1200,17 @@ def api_status():
     with state_lock:
         return jsonify(
             ok=True,
-            connected=state["connected"],
-            info_ready=state["info_ready"],
-            busy=state["busy"],
-            error=state["error"],
-            servos=[
-                dict(servos[i])
-                for i in IDS
-            ]
+            **{
+                **state,
+                "servos": [
+                    dict(servos[i])
+                    for i in IDS
+                ]
+            }
         )
 
-
 # ==========================================
-# 14. DIAGNOSTICS API
+# DIAGNOSTICS API
 # ==========================================
 
 @app.get("/api/diagnostics")
@@ -650,9 +1220,6 @@ def api_diagnostics():
             ok=True,
             port=PORT,
             baud=BAUD,
-            connected=state["connected"],
-            info_ready=state["info_ready"],
-            busy=state["busy"],
             serial_open=bool(
                 port and port.is_open
             ),
@@ -660,23 +1227,17 @@ def api_diagnostics():
             servo_online={
                 str(i): servos[i]["online"]
                 for i in IDS
-            }
+            },
+            connected=state["connected"],
+            emotion_armed=state["emotion_armed"]
         )
 
-
 # ==========================================
-# 15. REFRESH API
+# REFRESH API
 # ==========================================
 
 @app.post("/api/refresh")
 def api_refresh():
-
-    if not SERVO_HARDWARE_ENABLED:
-        return jsonify(
-            ok=False,
-            error="Servo hardware not connected"
-        ), 409
-
     try:
         with serial_lock:
             refresh(force_info=True)
@@ -692,14 +1253,12 @@ def api_refresh():
             error=str(exc)
         ), 503
 
-
 # ==========================================
-# 16. SOFTWARE SETZERO API
+# SOFTWARE SETZERO API
 # ==========================================
 
 @app.post("/api/servo/<int:sid>/zero")
 def api_zero(sid):
-
     if sid not in IDS:
         return jsonify(
             ok=False,
@@ -711,14 +1270,17 @@ def api_zero(sid):
     }:
         return jsonify(
             ok=False,
-            error="Confirmation flag missing"
+            error="Confirmation missing"
         ), 400
 
     with state_lock:
-        if state["busy"]:
+        if (
+            state["busy"]
+            or state["emotion_armed"]
+        ):
             return jsonify(
                 ok=False,
-                error="Servo is moving"
+                error="DISARM before SETZERO"
             ), 409
 
         state["busy"] = True
@@ -748,14 +1310,12 @@ def api_zero(sid):
         with state_lock:
             state["busy"] = False
 
-
 # ==========================================
-# 17. REAL MOVE API
+# MANUAL MOVE API
 # ==========================================
 
 @app.post("/api/servo/<int:sid>/move")
 def api_move(sid):
-
     if sid not in IDS:
         return jsonify(
             ok=False,
@@ -767,6 +1327,7 @@ def api_move(sid):
     ) or {}
 
     target = data.get("target")
+    speed = data.get("speed", 80)
 
     if (
         type(target) is not int
@@ -774,17 +1335,23 @@ def api_move(sid):
     ):
         return jsonify(
             ok=False,
-            error=(
-                "Target must be integer ticks "
-                "0..1023"
-            )
+            error="Target must be integer 0..1023"
+        ), 400
+
+    if (
+        type(speed) is not int
+        or not SPEED_MIN <= speed <= SPEED_MAX
+    ):
+        return jsonify(
+            ok=False,
+            error="Speed must be integer 40..200"
         ), 400
 
     with state_lock:
         if state["busy"]:
             return jsonify(
                 ok=False,
-                error="Another command is running"
+                error="Another command running"
             ), 409
 
         state["busy"] = True
@@ -794,8 +1361,7 @@ def api_move(sid):
     try:
         with serial_lock:
             result = move_absolute(
-                sid,
-                target
+                sid, target, speed
             )
 
         return jsonify(
@@ -810,19 +1376,15 @@ def api_move(sid):
         return jsonify(
             ok=False,
             error=str(exc),
-            note=(
-                "Read Actual position "
-                "before retrying"
-            )
+            note="Refresh actual before retrying"
         ), 409
 
     finally:
         with state_lock:
             state["busy"] = False
 
-
 # ==========================================
-# 18. CANCEL API
+# CANCEL API
 # ==========================================
 
 @app.post("/api/cancel")
@@ -832,160 +1394,248 @@ def api_cancel():
     return jsonify(
         ok=True,
         message=(
-            "Will stop sending next steps; "
+            "Cancel pending steps only; "
             "NOT hardware E-stop"
         )
     )
 
-
 # ==========================================
-# 19. START FLASK SERVER
+# EMOTION SPEED API
 # ==========================================
 
+@app.post("/api/emotion/speed")
+def api_emotion_speed():
+    try:
+        speeds = parse_speeds(
+            request.get_json(silent=True) or {}
+        )
 
-
-# =====================================
-# EMOTION BRIDGE
-# Camera/Voice -> Flask -> ESP32
-# =====================================
-
-@app.post("/api/emotion")
-def api_emotion():
-    global port
-
-    data = request.get_json(silent=True) or {}
-    emotion = data.get("emotion", "")
-
-    allowed = {
-        "IDLE",
-        "HAPPY",
-        "ANGRY",
-        "SURPRISED",
-        "SAD",
-        "SLEEPY",
-    }
-
-    if type(emotion) is not str or emotion not in allowed:
+    except ValueError as exc:
         return jsonify(
             ok=False,
-            error="Unknown emotion"
+            error=str(exc)
         ), 400
 
     with state_lock:
         if state["busy"]:
             return jsonify(
                 ok=False,
-                error="Servo movement in progress"
+                error="System busy"
+            ), 409
+
+        state["busy"] = True
+
+    try:
+        with serial_lock:
+            apply_speeds(speeds)
+
+        return jsonify(
+            ok=True,
+            speeds=speeds
+        )
+
+    except Exception as exc:
+        return jsonify(
+            ok=False,
+            error=str(exc)
+        ), 503
+
+    finally:
+        with state_lock:
+            state["busy"] = False
+
+# ==========================================
+# EMOTION ARM USING SAVED HOME
+# ==========================================
+
+@app.post("/api/emotion/arm")
+def api_emotion_arm():
+    """
+    ARM Servo 1-4 using saved Software Zero.
+    ARM does not move motors.
+    """
+
+    try:
+        speeds = parse_speeds(
+            request.get_json(silent=True) or {}
+        )
+
+    except ValueError as exc:
+        return jsonify(
+            ok=False,
+            error=str(exc)
+        ), 400
+
+    with state_lock:
+        if state["busy"]:
+            return jsonify(
+                ok=False,
+                error="System busy"
+            ), 409
+
+        state["busy"] = True
+
+    try:
+        with serial_lock:
+            refresh(force_info=True)
+
+            zeros = []
+
+            for i in IDS:
+                s = checked_servo(i)
+                z = s["zero"]
+
+                if type(z) is not int:
+                    raise ValueError(
+                        f"SETZERO Servo {i} first"
+                    )
+
+                if not (
+                    s["min"] + MARGIN + 32
+                    <= z
+                    <= s["max"] - MARGIN - 32
+                ):
+                    raise ValueError(
+                        f"Servo {i} home too close "
+                        "to hardware limit"
+                    )
+
+                if abs(s["actual"] - z) > 10:
+                    raise ValueError(
+                        f"Servo {i} not at Home: "
+                        f"actual {s['actual']}, "
+                        f"home {z}; GO ZERO first"
+                    )
+
+                zeros.append(z)
+
+            # Update independent servo speeds.
+            for name in MOTION_NAMES:
+                sync_motion(name)
+
+            apply_speeds(speeds)
+
+            # Use saved zeros.
+            transact(
+                "ARM HOME " +
+                " ".join(map(str, zeros)),
+                15
+            )
+
+        with state_lock:
+            state["emotion_armed"] = True
+
+        return jsonify(
+            ok=True,
+            armed=True,
+            home=zeros,
+            speeds=speeds
+        )
+
+    except Exception as exc:
+        with state_lock:
+            state["emotion_armed"] = False
+            state["error"] = str(exc)
+
+        return jsonify(
+            ok=False,
+            error=str(exc)
+        ), 409
+
+    finally:
+        with state_lock:
+            state["busy"] = False
+
+# ==========================================
+# EMOTION DISARM API
+# ==========================================
+
+@app.post("/api/emotion/disarm")
+def api_emotion_disarm():
+    with state_lock:
+        if state["busy"]:
+            return jsonify(
+                ok=False,
+                error="System busy"
+            ), 409
+
+        state["busy"] = True
+
+    try:
+        with serial_lock:
+            transact("DISARM", 4)
+
+        with state_lock:
+            state["emotion_armed"] = False
+
+        return jsonify(
+            ok=True,
+            armed=False
+        )
+
+    except Exception as exc:
+        return jsonify(
+            ok=False,
+            error=str(exc)
+        ), 503
+
+    finally:
+        with state_lock:
+            state["busy"] = False
+
+# ==========================================
+# EMOTION BRIDGE
+# ==========================================
+
+@app.post("/api/emotion")
+def api_emotion():
+    data = request.get_json(
+        silent=True
+    ) or {}
+
+    e = data.get("emotion", "")
+
+    if (
+        type(e) is not str
+        or e not in MOTION_COMMANDS
+    ):
+        return jsonify(
+            ok=False,
+            error="Unknown emotion or behavior"
+        ), 400
+
+    with state_lock:
+        if state["busy"]:
+            return jsonify(
+                ok=False,
+                error="System busy"
             ), 409
 
     try:
         with serial_lock:
+            if e in MOTION_NAMES:
+                sync_motion(e)
 
-            with state_lock:
-                if state["busy"]:
-                    return jsonify(
-                        ok=False,
-                        error="Servo movement in progress"
-                    ), 409
+            # RL_EMOTION_SPEED_V4
+            if e in SPEED_PROFILE_NAMES:
+                with emotion_speed_lock:
+                    selected = emotion_speed_profiles[e].copy()
+                apply_speeds({
+                    sid: selected[str(sid)] for sid in IDS
+                })
+            transact(e, 6)
 
-            if port is None or not port.is_open:
-                port = serial.Serial(
-                    PORT,
-                    BAUD,
-                    timeout=0.12,
-                    write_timeout=0.8
-                )
+        with state_lock:
+            state["emotion"] = e
 
-                time.sleep(1.8)
-
-            port.reset_input_buffer()
-
-            port.write(
-                (emotion + "\n").encode("ascii")
-            )
-
-            port.flush()
-
-            lines = []
-            deadline = time.monotonic() + 3.0
-
-            while time.monotonic() < deadline:
-
-                raw = port.readline()
-
-                if not raw:
-                    continue
-
-                line = raw.decode(
-                    "utf-8",
-                    errors="replace"
-                ).strip()
-
-                if not line:
-                    continue
-
-                lines.append(line)
-
-                if (
-    line == f"[EMOTION] {emotion}"
-    or line.startswith(f"[EMOTION] {emotion} |")
-):
-                    return jsonify(
-                        ok=True,
-                        emotion=emotion,
-                        acknowledged=True
-                    )
-
-                if line.startswith("[ERROR]"):
-
-                    # Ignore missing servo reports
-                    # only when hardware is not connected.
-                    servo_error = (
-                        line.startswith("[ERROR] Servo ID ")
-                        or re.match(
-                            r"^\[ERROR\] ID \d+ "
-                            r"(READPOS|READINFO) failed",
-                            line
-                        )
-                    )
-
-                    if (
-                        not SERVO_HARDWARE_ENABLED
-                        and servo_error
-                    ):
-                        print(
-                            "[SERVO NOT CONNECTED]",
-                            line
-                        )
-                        continue
-
-                    # Keep other firmware errors visible.
-                    return jsonify(
-                        ok=False,
-                        error=line
-                    ), 409
-
-            raise TimeoutError(
-                f"ESP32 did not acknowledge "
-                f"{emotion}; {lines[-8:]}"
-            )
+        return jsonify(
+            ok=True,
+            emotion=e,
+            acknowledged=True,
+            armed=state["emotion_armed"]
+        )
 
     except Exception as exc:
-
-        # Recover from invalid/disconnected COM3 handle.
-        if isinstance(
-            exc,
-            (OSError, serial.SerialException)
-        ):
-            try:
-                if port is not None:
-                    port.close()
-            except Exception:
-                pass
-
-            # Reopen COM3 on the next request.
-            port = None
-
         return jsonify(
             ok=False,
             error=str(exc)
@@ -994,25 +1644,128 @@ def api_emotion():
 
 @app.get("/api/emotion/capabilities")
 def api_emotion_capabilities():
-
     return jsonify(
         ok=True,
-        emotions=[
-            "IDLE",
-            "HAPPY",
-            "ANGRY",
-            "SURPRISED",
-            "SAD",
-            "SLEEPY",
-        ],
+        emotions=EMOTIONS,
+        behaviors=BEHAVIORS,
         protocol=(
-            "ESP32 serial emotion commands, "
-            "no auto ARM"
+            "Serial emotion/behavior; "
+            "manual ARM HOME required"
         )
     )
 
-if __name__ == "__main__":
+# ==========================================
+# HORMONE MONITORING API
+# READ ONLY
+# ==========================================
 
+@app.get("/api/monitor/hormone")
+def api_monitor_hormone():
+    csv_path = (
+        BASE.parent / "emotion_trace.csv"
+    )
+
+    if not csv_path.is_file():
+        return jsonify(
+            ok=False,
+            error="emotion_trace.csv not found"
+        ), 404
+
+    try:
+        latest = None
+
+        with csv_path.open(
+            "r",
+            encoding="utf-8-sig",
+            newline=""
+        ) as file:
+
+            for row in csv.DictReader(file):
+                if row.get("time_s"):
+                    latest = row
+
+        if latest is None:
+            return jsonify(
+                ok=False,
+                error="No monitoring data"
+            ), 503
+
+        age = max(
+            0.0,
+            time.time()
+            - csv_path.stat().st_mtime
+        )
+
+        emotions = (
+            "HAPPY",
+            "SURPRISED",
+            "SAD",
+            "SLEEPY"
+        )
+
+        return jsonify(
+            ok=True,
+
+            data_status=(
+                "LIVE"
+                if age <= 5.0
+                else "STALE_DATA"
+            ),
+            data_age_s=round(age, 2),
+
+            emotion=latest.get(
+                "expression", "IDLE"
+            ),
+            brain=latest.get(
+                "brain_expression", "IDLE"
+            ),
+            mode=latest.get(
+                "behavior_mode", "REST"
+            ),
+            gesture=latest.get(
+                "stable", "IDLE"
+            ),
+
+            hormone={
+                e: float(latest.get("H_" + e) or 0.0)
+                for e in emotions
+            },
+
+            receptor={
+                e: float(latest.get("R_" + e) or 0.0)
+                for e in emotions
+            },
+
+            curiosity=float(
+                latest["curiosity"]
+            ),
+            energy=float(
+                latest["energy"]
+            ),
+            arousal=float(
+                latest["arousal"]
+            ),
+            sample_time_s=float(
+                latest["time_s"]
+            )
+        )
+
+    except (
+        OSError,
+        ValueError,
+        KeyError,
+        TypeError
+    ) as exc:
+        return jsonify(
+            ok=False,
+            error=str(exc)
+        ), 503
+
+# ==========================================
+# START FLASK SERVER
+# ==========================================
+
+if __name__ == "__main__":
     load_zeros()
 
     if SERVO_HARDWARE_ENABLED:
@@ -1025,9 +1778,9 @@ if __name__ == "__main__":
         "================================"
     )
     print("ROBOT LAMP FK / IK DASHBOARD")
-    print(f"ESP32 PORT: {PORT}")
-    print(f"BAUD RATE: {BAUD}")
-    print(f"SERVO IDS: {IDS}")
+    print("ESP32 PORT:", PORT)
+    print("BAUD RATE:", BAUD)
+    print("SERVO IDS:", IDS)
     print("http://127.0.0.1:5000")
     print(
         "================================"
