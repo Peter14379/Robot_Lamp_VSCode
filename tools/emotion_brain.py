@@ -16,14 +16,12 @@ import time
 
 EMOTIONS = (
     "HAPPY",
-    "ANGRY",
     "SURPRISED",
     "SAD",
 )
 
 VALID = set(EMOTIONS) | {
     "IDLE",
-    "SLEEPY",
 }
 
 
