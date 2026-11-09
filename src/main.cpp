@@ -16,6 +16,7 @@
 #include <Arduino.h>
 #include <Adafruit_NeoPixel.h>
 #include <stdio.h>
+#include <math.h>
 #include <string.h>
 
 // ===============================
@@ -36,7 +37,7 @@ constexpr uint8_t IDS[4] = {1, 2, 3, 4};
 
 constexpr int SAFE_MARGIN = 20;
 constexpr int MAX_MANUAL_STEP = 300;
-constexpr int EMOTION_DELTA_LIMIT = 600;
+constexpr int EMOTION_DELTA_LIMIT = 800;
 constexpr int EMOTION_ARM_MARGIN = 60;
 
 constexpr uint16_t MIN_SPEED = 40;
@@ -127,6 +128,67 @@ uint8_t frameIndex = 0;
 
 uint32_t nextFrameAt = 0;
 bool motionActive = false;
+
+
+enum class MotionStage : uint8_t {
+    Prepare,
+    Travelling,
+    Holding
+};
+
+MotionStage motionStage = MotionStage::Prepare;
+
+int motionTargets[4] = {};
+int motionWaypoints[4] = {};
+
+bool motionWaypointActive[4] = {};
+
+uint8_t motionReadFail[4] = {};
+
+uint32_t motionWaypointSince[4] = {};
+uint32_t motionLastPoll = 0;
+uint32_t motionHoldUntil = 0;
+
+uint16_t motionHoldMs = 0;
+
+// RL_CPG_SMOOTH_V1
+// Smooth phase-based motion generation.
+
+constexpr uint32_t CPG_UPDATE_MS = 80;
+
+// Maximum planned trajectory rate.
+// Lower = slower and gentler.
+constexpr uint32_t CPG_RATE = 120;
+
+int cpgStart[4] = {};
+int cpgGoal[4] = {};
+int cpgLastGoal[4] = {};
+
+int cpgSafeLo[4] = {};
+int cpgSafeHi[4] = {};
+
+bool cpgEnabled[4] = {};
+
+uint8_t cpgReadFails[4] = {};
+
+uint32_t cpgStarted = 0;
+uint32_t cpgDuration = 0;
+uint32_t cpgLastUpdate = 0;
+uint32_t cpgLastSafety = 0;
+
+uint8_t cpgStable = 0;
+uint8_t cpgLastIncomplete = 1;
+
+// RL_CPG_STEP_FIX_V2
+constexpr int CPG_ARRIVAL_TOL = 18;
+
+int cpgLastActual[4] = {};
+char cpgLastError[72] = "NONE";
+
+
+
+
+
 
 
 // ===========================================
@@ -1159,6 +1221,24 @@ void setEmotion(String e) {
         e = "SURPRISED";
     }
 
+    // Ignore repeated emotion while moving.
+    if (motionActive) {
+        if (e == emotion) {
+            Serial.printf(
+                "[EMOTION] %s | %s\n",
+                e.c_str(),
+                emotionMask ? "REAL" : "SIMULATION"
+            );
+        } else {
+            Serial.printf(
+                "[ERROR] MOTION BUSY STEP=%u EMOTION=%s\n",
+                (unsigned)(frameIndex + 1),
+                emotion.c_str()
+            );
+        }
+        return;
+    }
+
     if (e == "IDLE") {
         frames = idleFrames;
         frameCount =
@@ -1208,7 +1288,9 @@ void setEmotion(String e) {
     }
 
     emotion = e;
+    snprintf(cpgLastError, sizeof(cpgLastError), "NONE");
     frameIndex = 0;
+    motionStage = MotionStage::Prepare;
     nextFrameAt = millis();
     motionActive = true;
 
@@ -1225,12 +1307,94 @@ void setEmotion(String e) {
 // UPDATE SERVO EMOTION
 // ===============================
 
-void updateMotion() {
+
+// ==========================================
+// RL_EMOTION_WAYPOINT_800_V1
+// VERIFIED WAYPOINT MOTION
+// ==========================================
+
+// Motion Editor: +/-800 relative to Home.
+// Each physical command: maximum 60 ticks.
+// Hardware limits remain enforced.
+
+constexpr int MOTION_WAYPOINT_TICKS = 60;
+constexpr int MOTION_ARRIVAL_TOL = 10;
+
+constexpr uint32_t MOTION_POLL_MS = 120;
+constexpr uint32_t MOTION_WAYPOINT_TIMEOUT_MS = 10000;
+
+
+bool motionServoEnabled(uint8_t i) {
+
+    if (!(emotionMask & (1u << i))) {
+        return false;
+    }
+
     if (
-        !motionActive ||
-        !frames ||
-        (int32_t)(millis() - nextFrameAt) < 0
+        emotion == "CURIO" &&
+        i >= 2 &&
+        !rlEnabled[rlSlot("CURIO")]
     ) {
+        return false;
+    }
+
+    return true;
+}
+
+
+void motionFailure(
+    uint8_t id,
+    const char *why
+) {
+    snprintf(
+        cpgLastError,
+        sizeof(cpgLastError),
+        "STEP=%u ID=%u REASON=%s",
+        (unsigned)(frameIndex + 1),
+        (unsigned)id,
+        why
+    );
+
+
+    Serial.printf(
+        "[EMOTION ERROR] STEP=%u ID=%u REASON=%s\n",
+        (unsigned)(frameIndex + 1),
+        (unsigned)id,
+        why
+    );
+
+    // Stops the emotion sequence.
+    // Not an electrical emergency stop.
+    disarm();
+}
+
+
+
+void updateMotion() {
+
+    if (!motionActive || !frames) return;
+
+    uint32_t now = millis();
+
+    // ==================================
+    // SIMULATION TIMER
+    // ==================================
+
+    if (motionStage == MotionStage::Holding) {
+
+        if (
+            (int32_t)(now - motionHoldUntil) < 0
+        ) return;
+
+        ++frameIndex;
+
+        if (frameIndex >= frameCount) {
+            motionActive = false;
+            Serial.println("[MOTION] Done");
+        } else {
+            motionStage = MotionStage::Prepare;
+        }
+
         return;
     }
 
@@ -1240,66 +1404,400 @@ void updateMotion() {
         return;
     }
 
-    const Frame &f = frames[frameIndex++];
+    const Frame &f = frames[frameIndex];
 
-    for (uint8_t i = 0; i < 4; i++) {
+    // ==================================
+    // PREPARE NEXT POSE
+    // ==================================
 
-        if (!(emotionMask & (1u << i))) {
-            continue;
+    if (motionStage == MotionStage::Prepare) {
+
+        uint32_t longest = 0;
+
+        // Validate all servo targets.
+        for (uint8_t i = 0; i < 4; ++i) {
+
+            cpgEnabled[i] =
+                motionServoEnabled(i);
+
+            cpgReadFails[i] = 0;
+
+            if (!cpgEnabled[i]) continue;
+
+            uint16_t pos, lo, hi, tq;
+
+            const int delta =
+                (int)f.delta[i];
+
+            const int target =
+                (int)homeTicks[i] + delta;
+
+            if (
+                abs(delta) > EMOTION_DELTA_LIMIT ||
+                target < 0 ||
+                target > 1023 ||
+                !servoChecks(
+                    IDS[i], pos, lo, hi, tq
+                )
+            ) {
+                motionFailure(
+                    IDS[i], "CPG_PRECHECK"
+                );
+                return;
+            }
+
+            int safeLo =
+                (int)lo + SAFE_MARGIN;
+
+            int safeHi =
+                (int)hi - SAFE_MARGIN;
+
+            if (
+                target < safeLo ||
+                target > safeHi
+            ) {
+                motionFailure(
+                    IDS[i], "CPG_LIMIT"
+                );
+                return;
+            }
+
+            // Enable torque at current position.
+            if (
+                tq == 0 &&
+                !moveServo(
+                    IDS[i], pos, servoSpeed[i]
+                )
+            ) {
+                motionFailure(
+                    IDS[i], "CPG_TORQUE"
+                );
+                return;
+            }
+
+            cpgLastActual[i] = (int)pos;
+            cpgStart[i] = pos;
+            cpgGoal[i] = target;
+            cpgLastGoal[i] = pos;
+
+            cpgSafeLo[i] = safeLo;
+            cpgSafeHi[i] = safeHi;
+
+            uint32_t distance =
+                (uint32_t)abs(
+                    target - (int)pos
+                );
+
+            if (distance > longest) {
+                longest = distance;
+            }
         }
 
-        // CURIO moves only Servo 1 and 2.
-        if (emotion == "CURIO" && i >= 2 && !rlEnabled[rlSlot("CURIO")]) {
-            continue;
-        }
+        // No motors if not armed.
+        if (!emotionMask) {
 
-        const int delta = f.delta[i];
+            motionStage = MotionStage::Holding;
 
-        const int target =
-            (int)homeTicks[i] + delta;
+            motionHoldUntil =
+                millis() + f.holdMs;
 
-        if (
-            delta < -EMOTION_DELTA_LIMIT ||
-            delta > EMOTION_DELTA_LIMIT ||
-            target < 0 ||
-            target > 1023 ||
-            !moveServo(
-                IDS[i],
-                (uint16_t)target,
-                servoSpeed[i]
-            )
-        ) {
-            Serial.printf(
-                "[EMOTION ERROR] ID=%u\n",
-                IDS[i]
+            Serial.println(
+                "[FRAME] SIMULATION ONLY"
             );
 
-            disarm();
             return;
+        }
+
+        // Minimum movement time.
+        uint32_t travel =
+            (
+                longest * 1000UL +
+                CPG_RATE - 1
+            ) / CPG_RATE;
+
+        cpgDuration =
+            (uint32_t)f.holdMs;
+
+        if (cpgDuration < 650) {
+            cpgDuration = 650;
+        }
+
+        if (cpgDuration < travel) {
+            cpgDuration = travel;
+        }
+
+        cpgStarted = millis();
+
+        cpgLastUpdate =
+            cpgStarted - CPG_UPDATE_MS;
+
+        cpgLastSafety = cpgStarted;
+
+        cpgStable = 0;
+        cpgLastIncomplete = 1;
+
+        motionStage = MotionStage::Travelling;
+
+        Serial.printf(
+            "[CPG] STEP=%u/%u MOVE=%lu ms\n",
+            (unsigned)(frameIndex + 1),
+            (unsigned)frameCount,
+            (unsigned long)cpgDuration
+        );
+
+        return;
+    }
+
+    // ==================================
+    // CONTINUOUS CPG MOTION
+    // ==================================
+
+    if (
+        motionStage != MotionStage::Travelling ||
+        (uint32_t)(now - cpgLastUpdate)
+            < CPG_UPDATE_MS
+    ) return;
+
+    cpgLastUpdate = now;
+
+    uint32_t elapsed =
+        (uint32_t)(now - cpgStarted);
+
+    // Time limit protects against
+    // an unreachable pose.
+    if (
+        elapsed >
+        cpgDuration + 12000UL
+    ) {
+        motionFailure(
+            cpgLastIncomplete,
+            "CPG_TIMEOUT"
+        );
+        return;
+    }
+
+    // Phase: 0.0 -> 1.0
+    float phase =
+        (float)elapsed /
+        (float)cpgDuration;
+
+    if (phase > 1.0f) {
+        phase = 1.0f;
+    }
+
+    // Smooth half-cosine oscillator.
+    float wave =
+        0.5f -
+        0.5f * cosf(
+            3.14159265f * phase
+        );
+
+    bool safety =
+        (uint32_t)(now - cpgLastSafety)
+        >= 800;
+
+    bool arrived =
+        phase >= 1.0f;
+
+    // ==================================
+    // CONTROL ALL FOUR SERVOS
+    // ==================================
+
+    for (uint8_t i = 0; i < 4; ++i) {
+
+        if (!cpgEnabled[i]) continue;
+
+        uint16_t actual = 0;
+        uint16_t lo = 0;
+        uint16_t hi = 0;
+        uint16_t tq = 0;
+
+        bool ok = safety
+            ? servoChecks(
+                IDS[i], actual, lo, hi, tq
+            )
+            : readPosition(
+                IDS[i], actual
+            );
+
+        if (!ok) {
+
+            arrived = false;
+            cpgLastIncomplete = IDS[i];
+
+            if (++cpgReadFails[i] >= 4) {
+                motionFailure(
+                    IDS[i], "CPG_FEEDBACK"
+                );
+                return;
+            }
+
+            continue;
+        }
+
+        cpgReadFails[i] = 0;
+        cpgLastActual[i] = (int)actual;
+
+        if (
+            (int)actual < cpgSafeLo[i] ||
+            (int)actual > cpgSafeHi[i] ||
+            (
+                safety &&
+                (
+                    tq == 0 ||
+                    cpgGoal[i] <
+                        (int)lo + SAFE_MARGIN ||
+                    cpgGoal[i] >
+                        (int)hi - SAFE_MARGIN
+                )
+            )
+        ) {
+            motionFailure(
+                IDS[i], "CPG_SAFETY"
+            );
+            return;
+        }
+
+        // Generate smooth target.
+        int desired = (int)lroundf(
+            cpgStart[i] +
+            (
+                cpgGoal[i] -
+                cpgStart[i]
+            ) * wave
+        );
+
+        // Never command more than 35 ticks
+        // ahead of actual position.
+        int lower = (int)actual - 35;
+        int upper = (int)actual + 35;
+
+        if (lower < cpgSafeLo[i]) {
+            lower = cpgSafeLo[i];
+        }
+
+        if (upper > cpgSafeHi[i]) {
+            upper = cpgSafeHi[i];
+        }
+
+        if (desired < lower) {
+            desired = lower;
+        }
+
+        if (desired > upper) {
+            desired = upper;
+        }
+
+        // Send a new goal only if changed.
+        if (
+            abs(
+                desired - cpgLastGoal[i]
+            ) >= 2
+        ) {
+            if (
+                !setGoal(
+                    IDS[i],
+                    (uint16_t)desired,
+                    servoSpeed[i]
+                )
+            ) {
+                motionFailure(
+                    IDS[i], "CPG_GOAL_WRITE"
+                );
+                return;
+            }
+
+            cpgLastGoal[i] = desired;
+        }
+
+        // Verify actual arrival.
+        if (
+            abs(
+                (int)actual - cpgGoal[i]
+            ) > CPG_ARRIVAL_TOL
+        ) {
+            arrived = false;
+            cpgLastIncomplete = IDS[i];
         }
     }
 
-    if (!emotionMask) {
-        Serial.printf(
-            "[FRAME] %s: SIMULATION ONLY\n",
-            emotion.c_str()
-        );
+    if (safety) {
+        cpgLastSafety = millis();
     }
 
-    nextFrameAt = millis() + f.holdMs;
+    // ==================================
+    // NEXT KEYFRAME WITHOUT EXTRA PAUSE
+    // ==================================
+
+    if (arrived) {
+
+        if (++cpgStable >= 2) {
+
+            Serial.printf(
+                "[CPG] STEP=%u/%u REACHED\n",
+                (unsigned)(frameIndex + 1),
+                (unsigned)frameCount
+            );
+
+            ++frameIndex;
+
+            cpgStable = 0;
+
+            if (frameIndex >= frameCount) {
+
+                motionActive = false;
+
+                Serial.println(
+                    "[MOTION] Done"
+                );
+
+            } else {
+
+                motionStage =
+                    MotionStage::Prepare;
+            }
+        }
+
+    } else {
+
+        cpgStable = 0;
+    }
 }
+
+
+
 
 // ===============================
 // STATUS / HELP
 // ===============================
 
 void printStatus() {
+
     Serial.printf(
-        "[STATUS] Emotion=%s Servo=%s "
-        "MASK=0x%02X\n",
+        "[STATUS] Emotion=%s Servo=%s MASK=0x%02X "
+        "ACTIVE=%u STEP=%u/%u STAGE=%u "
+        "LAST=%s ACT=%d,%d,%d,%d "
+        "GOAL=%d,%d,%d,%d\n",
         emotion.c_str(),
         emotionMask ? "REAL" : "SIMULATION",
-        emotionMask
+        (unsigned)emotionMask,
+        (unsigned)motionActive,
+        (unsigned)(
+            frameIndex < frameCount
+                ? frameIndex + 1
+                : frameCount
+        ),
+        (unsigned)frameCount,
+        (unsigned)static_cast<uint8_t>(motionStage),
+        cpgLastError,
+        cpgLastActual[0],
+        cpgLastActual[1],
+        cpgLastActual[2],
+        cpgLastActual[3],
+        cpgGoal[0],
+        cpgGoal[1],
+        cpgGoal[2],
+        cpgGoal[3]
     );
 
     for (uint8_t id : IDS) {

@@ -784,7 +784,7 @@ body.sim .real-only {
                     <th>Servo 2</th>
                     <th>Servo 3</th>
                     <th>Servo 4</th>
-                    <th>Hold ms</th>
+                    <th>Move ms</th>
                     <th></th>
                 </tr>
             </thead>
@@ -2857,8 +2857,8 @@ function addMotionRow(
                 <input
                     type="number"
                     step="1"
-                    min="${i < 4 ? -600 : 300}"
-                    max="${i < 4 ? 600 : 8000}"
+                    min="${i < 4 ? -800 : 300}"
+                    max="${i < 4 ? 800 : 8000}"
                     value="${v}"
                 >
             </td>
@@ -2919,7 +2919,7 @@ function motionRows() {
             ) ||
 
             row.slice(0, 4).some(
-                v => Math.abs(v) > 600
+                v => Math.abs(v) > 800
             ) ||
 
             row[4] < 300 ||
@@ -2927,7 +2927,7 @@ function motionRows() {
         )
     ) {   
     throw Error(
-        "1..12 steps; offsets -600..600; " +
+        "1..12 steps; offsets -800..800; " +
         "hold 300..8000 ms"
 );
 

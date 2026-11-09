@@ -1271,6 +1271,186 @@ class EmotionTransport:
 # MAIN
 # ==========================================
 
+
+# ==========================================
+# ROBOT_LAMP_SIGNAL_FILTER_V2
+# OUTGOING EMOTION FILTER
+# ==========================================
+
+class FilteredEmotionTransport(EmotionTransport):
+
+    STABLE_SECONDS = 0.8
+    MIN_GAP_SECONDS = 3.0
+    SETTLE_SECONDS = 2.0
+    FALLBACK_MOTION_SECONDS = 8.0
+
+    def __init__(self, mode, server, port):
+
+        super().__init__(mode, server, port)
+
+        self._filter_candidate = None
+        self._filter_since = 0.0
+
+        self._filter_last = None
+        self._filter_last_at = 0.0
+        self._filter_next_at = 0.0
+
+    # ======================================
+    # READ SAVED MOTION DURATION
+    # ======================================
+
+    def _expected_seconds(self, emotion):
+
+        if emotion == "IDLE":
+            return 0.0
+
+        profile = (
+            ROOT
+            / "dashboard"
+            / "emotion_motion.json"
+        )
+
+        try:
+            data = json.loads(
+                profile.read_text(
+                    encoding="utf-8"
+                )
+            )
+
+            frames = data[emotion]
+
+            if (
+                not isinstance(frames, list)
+                or not 1 <= len(frames) <= 12
+            ):
+                raise ValueError(
+                    "Invalid frame count"
+                )
+
+            total_ms = 0
+
+            for frame in frames:
+
+                if (
+                    not isinstance(frame, list)
+                    or len(frame) != 5
+                ):
+                    raise ValueError(
+                        "Invalid frame"
+                    )
+
+                hold = frame[4]
+
+                if (
+                    type(hold) is not int
+                    or not 300 <= hold <= 8000
+                ):
+                    raise ValueError(
+                        "Invalid hold time"
+                    )
+
+                total_ms += hold
+
+            return total_ms / 1000.0
+
+        except (
+            OSError,
+            ValueError,
+            KeyError,
+            TypeError
+        ):
+            return self.FALLBACK_MOTION_SECONDS
+
+    # ======================================
+    # FILTER OUTGOING COMMANDS
+    # ======================================
+
+    def send(self, emotion, source):
+
+        # Preview does not command the motors.
+        if self.mode == "preview":
+            return super().send(
+                emotion,
+                source
+            )
+
+        allowed = (
+            "IDLE",
+            "CURIO",
+            "HAPPY",
+            "SURPRISED",
+            "SAD",
+            "SLEEPY"
+        )
+
+        if emotion not in allowed:
+            return False
+
+        now = time.monotonic()
+
+        # Step 1: emotion must be stable.
+        if emotion != self._filter_candidate:
+
+            self._filter_candidate = emotion
+            self._filter_since = now
+
+            return False
+
+        if (
+            now - self._filter_since
+            < self.STABLE_SECONDS
+        ):
+            return False
+
+        # Step 2: wait until the previous
+        # motion's estimated duration ends.
+        if now < self._filter_next_at:
+            return False
+
+        # Step 3: suppress duplicate emotions.
+        if emotion == self._filter_last:
+
+            if (
+                emotion != "CURIO"
+                or now - self._filter_last_at < 18.0
+            ):
+                return True
+
+        # Step 4: use the existing transport.
+        success = super().send(
+            emotion,
+            source
+        )
+
+        if not success:
+            return False
+
+        # Step 5: lock based on saved Hold ms.
+        self._filter_last = emotion
+        self._filter_last_at = time.monotonic()
+
+        duration = self._expected_seconds(
+            emotion
+        )
+
+        lock_for = max(
+            self.MIN_GAP_SECONDS,
+            duration + self.SETTLE_SECONDS
+        )
+
+        self._filter_next_at = (
+            self._filter_last_at
+            + lock_for
+        )
+
+        print(
+            f"[FILTER] {emotion} accepted; "
+            f"pause {lock_for:.1f}s"
+        )
+
+        return True
+
+
 def main():
 
     parser = argparse.ArgumentParser()
@@ -1472,7 +1652,7 @@ def main():
 
         camera = LatestCamera(args.camera)
 
-        output = EmotionTransport(
+        output = FilteredEmotionTransport(
             "preview" if args.preview_only else args.transport,
             args.server,
             args.port

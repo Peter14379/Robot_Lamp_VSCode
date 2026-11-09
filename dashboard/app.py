@@ -143,13 +143,13 @@ def validate_motion(name, frames):
                 for v in row
             )
             or any(
-                abs(v) > 600
+                abs(v) > 800
                 for v in row[:4]
             )
             or not 300 <= row[4] <= 8000
         ):
             raise ValueError(
-                "Frame: four offsets (-600..600), "
+                "Frame: four offsets (-800..800), "
                 "hold 300..8000 ms"
             )
 
@@ -1633,6 +1633,29 @@ def api_emotion():
             emotion=e,
             acknowledged=True,
             armed=state["emotion_armed"]
+        )
+
+    except Exception as exc:
+        return jsonify(
+            ok=False,
+            error=str(exc)
+        ), 503
+
+
+
+# RL_CPG_STEP_FIX_V2
+@app.get("/api/emotion/cpg-status")
+def api_emotion_cpg_status():
+    try:
+        with serial_lock:
+            lines = transact("STATUS", 5)
+
+        return jsonify(
+            ok=True,
+            status=next(
+                line for line in lines
+                if line.startswith("[STATUS]")
+            )
         )
 
     except Exception as exc:
