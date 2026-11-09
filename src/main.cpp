@@ -63,6 +63,25 @@ uint8_t emotionMask = 0;
 String emotion = "IDLE";
 String rxLine;
 
+// RL_WAKE_HOME_V1
+// SLEEPY -> IDLE HOME -> NEXT EMOTION
+
+enum WakePhase : uint8_t {
+    WAKE_NONE = 0,
+    WAKE_WAIT_SLEEP = 1,
+    WAKE_WAIT_HOME = 2,
+    WAKE_HOLD_IDLE = 3
+};
+
+WakePhase wakePhase = WAKE_NONE;
+
+String wakePending = "";
+
+bool wakeInternal = false;
+
+uint32_t wakeHomeSince = 0;
+
+
 // ===============================
 // EMOTION KEYFRAMES
 // ===============================
@@ -159,6 +178,44 @@ constexpr uint32_t CPG_UPDATE_MS = 80;
 // Maximum planned trajectory rate.
 // Lower = slower and gentler.
 constexpr uint32_t CPG_RATE = 120;
+
+// RL_HORMONE_CPG_V1
+// Hormone value is normalized to 0..1.
+// 0 is slow, NOT motor stop.
+
+float motorHormone = 0.0f;
+uint32_t motorHormoneAt = 0;
+
+float cpgPhase = 0.0f;
+
+bool hormoneFresh() {
+    return motorHormoneAt != 0 &&
+        (uint32_t)(millis() - motorHormoneAt) <= 3000UL;
+}
+
+uint16_t cpgMotorSpeedRaw(uint8_t index) {
+    if (!hormoneFresh()) {
+        return servoSpeed[index];
+    }
+
+    int raw = (int)lroundf(
+        40.0f + 460.0f * motorHormone
+    );
+
+    return (uint16_t)constrain(raw, 40, 500);
+}
+
+float cpgHormoneRate() {
+    if (!hormoneFresh()) {
+        return 1.0f;
+    }
+
+    // H=0 -> 0.5x
+    // H=0.5 -> 1.0x
+    // H=1 -> 1.5x
+    return 0.5f + motorHormone;
+}
+
 
 int cpgStart[4] = {};
 int cpgGoal[4] = {};
@@ -1058,6 +1115,10 @@ bool moveServo(
 // ===============================
 
 void disarm() {
+    wakePhase = WAKE_NONE;
+    wakePending = "";
+    wakeInternal = false;
+
     emotionMask = 0;
     motionActive = false;
     frames = nullptr;
@@ -1220,6 +1281,72 @@ void setEmotion(String e) {
     if (e == "SHOCK") {
         e = "SURPRISED";
     }
+
+    // RL_WAKE_HOME_V1
+    // Keep the next emotion while sleeping.
+    if (
+        !wakeInternal &&
+        (
+            emotion == "SLEEPY" ||
+            wakePhase != WAKE_NONE
+        )
+    ) {
+        bool valid =
+            e == "IDLE" ||
+            e == "HAPPY" ||
+            e == "SURPRISED" ||
+            e == "SAD" ||
+            e == "SLEEPY" ||
+            e == "CURIO";
+
+        if (!valid) {
+            Serial.println(
+                "[ERROR] Unknown wake emotion"
+            );
+            return;
+        }
+
+        if (!emotionMask) {
+            Serial.println(
+                "[ERROR] WAKE requires ARM"
+            );
+            return;
+        }
+
+        if (e != "SLEEPY") {
+
+            if (wakePhase == WAKE_NONE) {
+                wakePhase = WAKE_WAIT_SLEEP;
+            }
+
+            // Keep the first real wake gesture.
+            // An IDLE update must not erase it.
+            if (
+                wakePending.isEmpty() ||
+                wakePending == "IDLE"
+            ) {
+                wakePending = e;
+            }
+
+            Serial.printf(
+                "[WAKE] QUEUED=%s\n",
+                wakePending.c_str()
+            );
+        }
+
+        // Acknowledge the queued request.
+        // Physical motion starts after waking.
+        Serial.printf(
+            "[EMOTION] %s | %s\n",
+            e.c_str(),
+            emotionMask
+                ? "REAL"
+                : "SIMULATION"
+        );
+
+        return;
+    }
+
 
     // Ignore repeated emotion while moving.
     if (motionActive) {
@@ -1527,6 +1654,7 @@ void updateMotion() {
         }
 
         cpgStarted = millis();
+        cpgPhase = 0.0f;
 
         cpgLastUpdate =
             cpgStarted - CPG_UPDATE_MS;
@@ -1558,6 +1686,13 @@ void updateMotion() {
             < CPG_UPDATE_MS
     ) return;
 
+    uint32_t cpgDeltaMs =
+        (uint32_t)(now - cpgLastUpdate);
+
+    if (cpgDeltaMs > 200UL) {
+        cpgDeltaMs = 200UL;
+    }
+
     cpgLastUpdate = now;
 
     uint32_t elapsed =
@@ -1566,8 +1701,7 @@ void updateMotion() {
     // Time limit protects against
     // an unreachable pose.
     if (
-        elapsed >
-        cpgDuration + 12000UL
+        elapsed > cpgDuration * 3UL + 12000UL
     ) {
         motionFailure(
             cpgLastIncomplete,
@@ -1577,13 +1711,16 @@ void updateMotion() {
     }
 
     // Phase: 0.0 -> 1.0
-    float phase =
-        (float)elapsed /
-        (float)cpgDuration;
+    cpgPhase += (
+        (float)cpgDeltaMs /
+        (float)cpgDuration
+    ) * cpgHormoneRate();
 
-    if (phase > 1.0f) {
-        phase = 1.0f;
+    if (cpgPhase > 1.0f) {
+        cpgPhase = 1.0f;
     }
+
+    float phase = cpgPhase;
 
     // Smooth half-cosine oscillator.
     float wave =
@@ -1698,7 +1835,7 @@ void updateMotion() {
                 !setGoal(
                     IDS[i],
                     (uint16_t)desired,
-                    servoSpeed[i]
+                    cpgMotorSpeedRaw(i)
                 )
             ) {
                 motionFailure(
@@ -1765,6 +1902,183 @@ void updateMotion() {
 }
 
 
+
+
+
+// ==========================================
+// RL_WAKE_HOME_V1
+// SLEEPY -> WAKING -> IDLE -> NEXT
+// ==========================================
+
+void updateWakeTransition() {
+
+    if (wakePhase == WAKE_NONE) {
+        return;
+    }
+
+    // No automatic motion when DISARMED.
+    if (!emotionMask) {
+        wakePhase = WAKE_NONE;
+        wakePending = "";
+        return;
+    }
+
+    // ======================================
+    // PHASE 1: WAIT FOR SLEEPY TO FINISH
+    // ======================================
+
+    if (wakePhase == WAKE_WAIT_SLEEP) {
+
+        if (motionActive) {
+            return;
+        }
+
+        wakePhase = WAKE_WAIT_HOME;
+
+        // Bypass only the emotion queue.
+        // Do not bypass servo safety checks.
+        wakeInternal = true;
+
+        setEmotion("IDLE");
+
+        wakeInternal = false;
+
+        Serial.println(
+            "[WAKE] IDLE HOME START"
+        );
+
+        return;
+    }
+
+    // ======================================
+    // PHASE 2: WAIT FOR IDLE / HOME
+    // ======================================
+
+    if (wakePhase == WAKE_WAIT_HOME) {
+
+        // CPG must complete all movement.
+        if (motionActive) {
+            return;
+        }
+
+        if (emotion != "IDLE") {
+
+            Serial.println(
+                "[WAKE ERROR] IDLE interrupted"
+            );
+
+            disarm();
+            return;
+        }
+
+        // Confirm Home using actual
+        // feedback from each armed servo.
+        for (uint8_t i = 0; i < 4; ++i) {
+
+            if (!(emotionMask & (1u << i))) {
+                continue;
+            }
+
+            uint16_t actual = 0;
+
+            bool ok = false;
+
+            // Retry temporary bus read failure.
+            for (uint8_t attempt = 0;
+                 attempt < 3;
+                 ++attempt) {
+
+                if (
+                    readPosition(
+                        IDS[i],
+                        actual
+                    )
+                ) {
+                    ok = true;
+                    break;
+                }
+
+                delay(30);
+            }
+
+            if (
+                !ok ||
+                abs(
+                    (int)actual -
+                    (int)homeTicks[i]
+                ) > 18
+            ) {
+
+                Serial.printf(
+                    "[WAKE ERROR] HOME "
+                    "ID=%u ACT=%u HOME=%u\n",
+                    (unsigned)IDS[i],
+                    (unsigned)actual,
+                    (unsigned)homeTicks[i]
+                );
+
+                // Cancel the sequence.
+                // Do not force a new emotion.
+                disarm();
+                return;
+            }
+        }
+
+        // Home reached successfully.
+        wakeHomeSince = millis();
+
+        wakePhase = WAKE_HOLD_IDLE;
+
+        Serial.println(
+            "[WAKE] HOME VERIFIED; IDLE HOLD"
+        );
+
+        return;
+    }
+
+    // ======================================
+    // PHASE 3: PAUSE AT HOME FOR 1 SECOND
+    // ======================================
+
+    if (wakePhase == WAKE_HOLD_IDLE) {
+
+        if (
+            (uint32_t)(
+                millis() - wakeHomeSince
+            ) < 1000UL
+        ) {
+            return;
+        }
+
+        String next = wakePending;
+
+        wakePending = "";
+        wakePhase = WAKE_NONE;
+
+        // ==================================
+        // PHASE 4: START PENDING EMOTION
+        // ==================================
+
+        if (
+            next.length() > 0 &&
+            next != "IDLE"
+        ) {
+
+            Serial.printf(
+                "[WAKE] START=%s\n",
+                next.c_str()
+            );
+
+            setEmotion(next);
+
+        } else {
+
+            Serial.println(
+                "[WAKE] READY IDLE"
+            );
+        }
+    }
+}
 
 
 // ===============================
@@ -1983,6 +2297,41 @@ void command(String cmd) {
             );
         }
 
+        return;
+    }
+
+
+    // RL_HORMONE_CPG_V1
+    if (cmd.startsWith("CPG H ")) {
+        unsigned int value = 0;
+        int consumed = 0;
+
+        bool valid =
+            sscanf(
+                cmd.c_str(),
+                "CPG H %u %n",
+                &value,
+                &consumed
+            ) == 1 &&
+            consumed > 0 &&
+            cmd.substring(consumed).isEmpty() &&
+            value <= 1000;
+
+        if (!valid) {
+            Serial.println(
+                "[ERROR] Usage: CPG H 0..1000"
+            );
+            return;
+        }
+
+        motorHormone = value / 1000.0f;
+        motorHormoneAt = millis();
+
+        Serial.printf(
+            "[HORMONE OK] H=%u RAW=%u\n",
+            value,
+            (unsigned)cpgMotorSpeedRaw(0)
+        );
         return;
     }
 
@@ -2215,4 +2564,5 @@ void loop() {
     }
 
     updateMotion();
+    updateWakeTransition();
 }

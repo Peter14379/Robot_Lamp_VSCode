@@ -414,6 +414,11 @@ def transact(command, timeout=5):
             if line.startswith("[SPEED OK]"):
                 return lines
 
+        # RL_HORMONE_CPG_V1
+        elif command.startswith("CPG H "):
+            if line.startswith("[HORMONE OK]"):
+                return lines
+
         # ARM with Dashboard Home.
         elif command.startswith("ARM HOME "):
             if line.startswith(
@@ -1587,6 +1592,98 @@ def api_emotion_disarm():
 # EMOTION BRIDGE
 # ==========================================
 
+
+# RL_HORMONE_CPG_V1
+# Hormone updates are independent of emotion changes.
+
+@app.post("/api/hormone/drive")
+def api_hormone_drive():
+    payload = request.get_json(silent=True) or {}
+
+    value = payload.get("hormone")
+
+    try:
+        if type(value) not in (int, float):
+            raise ValueError("Invalid hormone")
+
+        h = float(value)
+
+        if not 0.0 <= h <= 1.0:
+            raise ValueError("Hormone must be 0..1")
+
+    except (ValueError, TypeError) as exc:
+        return jsonify(
+            ok=False,
+            error=str(exc)
+        ), 400
+
+    speed = round(40 + 460 * h)
+
+    with state_lock:
+        state["hormone_value"] = round(h, 4)
+        state["hormone_speed_raw"] = speed
+        state["hormone_seen_at"] = time.monotonic()
+
+        armed = bool(state["emotion_armed"])
+        busy = bool(state["busy"])
+
+    if not armed or busy:
+        return jsonify(
+            ok=True,
+            applied=False,
+            reason="NOT_ARMED" if not armed else "BUSY",
+            hormone=h,
+            speed_raw=speed
+        )
+
+    try:
+        with serial_lock:
+            transact(
+                f"CPG H {round(h * 1000)}",
+                3
+            )
+
+        return jsonify(
+            ok=True,
+            applied=True,
+            hormone=h,
+            speed_raw=speed
+        )
+
+    except Exception as exc:
+        return jsonify(
+            ok=False,
+            error=str(exc)
+        ), 503
+
+
+@app.get("/api/hormone/drive")
+def api_hormone_drive_status():
+    with state_lock:
+        h = state.get("hormone_value", 0.0)
+        speed = state.get("hormone_speed_raw", 40)
+        seen = state.get("hormone_seen_at", 0.0)
+        armed = state["emotion_armed"]
+
+    age = (
+        time.monotonic() - seen
+        if seen > 0 else None
+    )
+
+    return jsonify(
+        ok=True,
+        hormone=h,
+        speed_raw=speed,
+        armed=armed,
+        age_s=round(age, 2) if age is not None else None,
+        data_status=(
+            "LIVE"
+            if age is not None and age < 3.0
+            else "STALE"
+        )
+    )
+
+
 @app.post("/api/emotion")
 def api_emotion():
     data = request.get_json(
@@ -1617,7 +1714,10 @@ def api_emotion():
                 sync_motion(e)
 
             # RL_EMOTION_SPEED_V4
-            if e in SPEED_PROFILE_NAMES:
+            if (
+                e in SPEED_PROFILE_NAMES
+                and data.get("control_mode") != "hormone"
+            ):
                 with emotion_speed_lock:
                     selected = emotion_speed_profiles[e].copy()
                 apply_speeds({

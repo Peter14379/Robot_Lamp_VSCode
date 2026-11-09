@@ -22,6 +22,7 @@ EMOTIONS = (
 
 VALID = set(EMOTIONS) | {
     "IDLE",
+    "SLEEPY",
 }
 
 
@@ -40,6 +41,7 @@ class Decision:
     inactive_seconds: float
 
 
+# RL_HORMONE_CPG_V1
 class EmotionBrain:
     """
     Sensor -> Hormone -> Receptor -> Decision
@@ -84,9 +86,9 @@ class EmotionBrain:
         )
 
         # Artificial hormone parameters
-        self.kprod = 2.1
-        self.kclear = 1.35
-        self.kbind = 0.12
+        self.kprod = 0.8
+        self.kclear = 0.6
+        self.kbind = 0.2
         self.receptor_k = 0.27
 
         # Decision thresholds

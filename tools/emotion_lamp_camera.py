@@ -1169,6 +1169,10 @@ class EmotionTransport:
         self.last_attempt = 0.0
         self.last_sent_time = 0.0
 
+        self.last_hormone_attempt = 0.0
+        self.last_hormone_ok = 0.0
+        self.last_hormone_value = None
+
         if mode == "auto":
 
             try:
@@ -1222,7 +1226,8 @@ class EmotionTransport:
 
                 data = json.dumps({
                     "emotion": emotion,
-                    "source": source
+                    "source": source,
+                    "control_mode": "hormone"
                 }).encode("utf-8")
 
                 request = urllib.request.Request(
@@ -1259,6 +1264,62 @@ class EmotionTransport:
 
         except Exception as exc:
             print("[TRANSPORT ERROR]", exc)
+            return False
+
+
+    # RL_HORMONE_CPG_V1
+    def send_hormone(self, value):
+        if self.mode != "http":
+            return False
+
+        h = max(0.0, min(1.0, float(value)))
+        now = time.monotonic()
+
+        # At most one update every 0.8 s.
+        if now - self.last_hormone_attempt < 0.8:
+            return False
+
+        # Suppress near-identical values, but send
+        # a heartbeat so ESP32 knows data is fresh.
+        if (
+            self.last_hormone_value is not None
+            and abs(h - self.last_hormone_value) < 0.025
+            and now - self.last_hormone_ok < 2.0
+        ):
+            return True
+
+        self.last_hormone_attempt = now
+
+        try:
+            body = json.dumps({
+                "hormone": round(h, 4)
+            }).encode("utf-8")
+
+            req = urllib.request.Request(
+                self.server + "/api/hormone/drive",
+                data=body,
+                method="POST",
+                headers={
+                    "Content-Type": "application/json"
+                }
+            )
+
+            with urllib.request.urlopen(
+                req,
+                timeout=2.5
+            ) as response:
+                result = json.load(response)
+
+            if not result.get("ok"):
+                raise RuntimeError(str(result))
+
+            self.last_hormone_value = h
+            self.last_hormone_ok = time.monotonic()
+
+            return True
+
+        except Exception as exc:
+            print("[HORMONE TRANSPORT ERROR]", exc)
             return False
 
     def close(self):
@@ -1658,6 +1719,41 @@ def main():
             args.port
         )
 
+
+        # RL_CAMERA_ASYNC_IO_V1
+        # Network I/O runs outside the camera frame loop.
+
+        io_lock = threading.Lock()
+
+        latest_io = {
+            "hormone": 0.0,
+            "emotion": "IDLE",
+            "source": "",
+            "updated": 0.0,
+        }
+
+        def camera_network_worker():
+            while not stop.is_set():
+                with io_lock:
+                    item = latest_io.copy()
+
+                age = time.monotonic() - item["updated"]
+
+                if item["updated"] > 0 and age < 2.0:
+                    output.send_hormone(item["hormone"])
+                    output.send(
+                        item["emotion"],
+                        item["source"]
+                    )
+
+                stop.wait(0.15)
+
+        if output.mode == "http":
+            threading.Thread(
+                target=camera_network_worker,
+                daemon=True
+            ).start()
+
         if (
             args.look_servo is not None
             and output.mode == "http"
@@ -1724,6 +1820,12 @@ def main():
             "curiosity",
             "energy",
             "arousal",
+        ]
+
+        fields += [
+            "H_MOTOR",
+            "MOTOR_SPEED_RAW",
+            "STIMULUS_MAX",
         ]
 
         fields += [
@@ -2174,6 +2276,18 @@ def main():
                         else:
                             expression = "IDLE"
 
+                    # Continue selected emotion while its
+                    # hormone remains above Brain threshold.
+                    if (
+                        not valid_hand
+                        and not voice_active
+                        and decision.emotion in EMOTIONS
+                        and not sleeping
+                    ):
+                        expression = decision.emotion
+                        mode = "HORMONE"
+                        curio_hold_until = 0.0
+
                     # Prevent LookBridge from moving
                     # motors during ESP32 CURIO motion.
                     if look_bridge is not None:
@@ -2208,10 +2322,43 @@ def main():
                     # ESP32 OUTPUT
                     # ======================
 
-                    output.send(
-                        expression,
-                        f"{decision.source} | AUTO:{mode}"
+                    # RL_HORMONE_CPG_V1
+                    # H is the actual Brain concentration.
+                    # IDLE / CURIO / SLEEPY use a slow baseline.
+                    motor_drive = (
+                        max(decision.hormone.values(), default=0.0)
+                        if expression in EMOTIONS
+                        else 0.0
                     )
+
+                    motor_drive = max(
+                        0.0, min(1.0, motor_drive)
+                    )
+
+                    motor_speed_raw = round(
+                        40 + 460 * motor_drive
+                    )
+
+                    stimulus_max = max(
+                        decision.stimulus.values(),
+                        default=0.0
+                    )
+
+                    if output.mode == "http":
+                        with io_lock:
+                            latest_io.update(
+                                hormone=motor_drive,
+                                emotion=expression,
+                                source=(
+                                    f"{decision.source} | AUTO:{mode}"
+                                ),
+                                updated=time.monotonic()
+                            )
+                    else:
+                        output.send(
+                            expression,
+                            f"{decision.source} | AUTO:{mode}"
+                        )
 
                     # ======================
                     # SAVE CSV
@@ -2273,6 +2420,12 @@ def main():
                             )
                             for e in ACTIVE_EMOTIONS
                         })
+
+                        row["H_MOTOR"] = f"{motor_drive:.4f}"
+                        row["MOTOR_SPEED_RAW"] = motor_speed_raw
+                        row["STIMULUS_MAX"] = (
+                            f"{stimulus_max:.4f}"
+                        )
 
                         writer.writerow(row)
                         logfile.flush()
@@ -2380,9 +2533,9 @@ def main():
                             f"| Motion: {motion_ratio:.3f}"
                         ),
                         (
-                            f"Curiosity: {behavior.curiosity:.2f} "
-                            f"| Energy: {behavior.energy:.2f} "
-                            f"| Arousal: {behavior.arousal:.2f}"
+                            f"H_HAPPY: {decision.hormone.get('HAPPY', 0.0):.2f} "
+                            f"| H_SURPRISED: {decision.hormone.get('SURPRISED', 0.0):.2f} "
+                            f"| H_SAD: {decision.hormone.get('SAD', 0.0):.2f}"
                         ),
                         (
                             f"LOOK: {last_look} "
@@ -2391,9 +2544,9 @@ def main():
                         ),
                         track_text,
                         (
-                            f"Face confidence: "
-                            f"{args.face_confidence:.2f} "
-                            f"| Detector: MediaPipe"
+                            f"H_MOTOR: {motor_drive:.2f} "
+                            f"| Stimulus: {stimulus_max:.2f} "
+                            f"| Speed: {motor_speed_raw} RAW"
                         )
                     ]
 
