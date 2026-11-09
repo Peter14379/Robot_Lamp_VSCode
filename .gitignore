@@ -5,3 +5,7 @@ __pycache__/
 venv/
 .env
 .env.*.vscode/
+*.bak
+index_backup.html
+__pycache__/
+*.pyc
