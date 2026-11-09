@@ -36,11 +36,11 @@ constexpr uint8_t IDS[4] = {1, 2, 3, 4};
 
 constexpr int SAFE_MARGIN = 20;
 constexpr int MAX_MANUAL_STEP = 300;
-constexpr int EMOTION_DELTA_LIMIT = 150;
+constexpr int EMOTION_DELTA_LIMIT = 600;
 constexpr int EMOTION_ARM_MARGIN = 60;
 
 constexpr uint16_t MIN_SPEED = 40;
-constexpr uint16_t MAX_SPEED = 200;
+constexpr uint16_t MAX_SPEED = 500;
 constexpr uint16_t DEFAULT_SPEED = 80;
 
 constexpr float MIN_VOLT = 6.5f;
@@ -1544,7 +1544,7 @@ void command(String cmd) {
             } else {
                 Serial.println(
                     "[ERROR] Usage: "
-                    "SPEED 1 80 (40..200)"
+                    "SPEED 1 80 (40..500)"
                 );
             }
         }
@@ -1641,7 +1641,7 @@ void command(String cmd) {
             Serial.println(
                 "[ERROR] Usage: "
                 "MOVE 1 300 80 "
-                "(speed 40..200)"
+                "(speed 40..500)"
             );
         }
 

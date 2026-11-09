@@ -45,7 +45,7 @@ DIRECT_MOVE_MAX_DELTA = 300
 DIRECT_MOVE_TIMEOUT = 15.0
 
 SPEED_MIN = 40
-SPEED_MAX = 200
+SPEED_MAX = 500
 
 EMOTIONS = (
     "IDLE",
@@ -143,13 +143,13 @@ def validate_motion(name, frames):
                 for v in row
             )
             or any(
-                abs(v) > 150
+                abs(v) > 600
                 for v in row[:4]
             )
             or not 300 <= row[4] <= 8000
         ):
             raise ValueError(
-                "Frame: four offsets (-150..150), "
+                "Frame: four offsets (-600..600), "
                 "hold 300..8000 ms"
             )
 
@@ -1344,7 +1344,7 @@ def api_move(sid):
     ):
         return jsonify(
             ok=False,
-            error="Speed must be integer 40..200"
+            error="Speed must be integer 40..500"
         ), 400
 
     with state_lock:

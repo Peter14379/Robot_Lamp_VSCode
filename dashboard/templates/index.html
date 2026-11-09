@@ -832,7 +832,7 @@ body.sim .real-only {
 
     <h3>
         Velocity for this emotion
-        (RAW 40-200)
+        (RAW 40-500)
     </h3>
 
     <p class="muted">
@@ -1715,10 +1715,10 @@ function speeds() {
         if (
             !Number.isInteger(v) ||
             v < 40 ||
-            v > 200
+            v > 500
         ) {
             throw Error(
-                `Servo ${id}: speed 40..200 RAW`
+                `Servo ${id}: speed 40..500 RAW`
             );
         }
 
@@ -1763,10 +1763,10 @@ async function moveReal(
         if (
             !Number.isInteger(speed) ||
             speed < 40 ||
-            speed > 200
+            speed > 500
         ) {
             throw Error(
-                "Velocity 40..200 RAW"
+                "Velocity 40..500 RAW"
             );
         }
 
@@ -2576,7 +2576,7 @@ function init() {
                         <input
                             type="number"
                             min="40"
-                            max="200"
+                            max="500"
                             step="1"
                             value="80"
                             id="real-speed-${id}"
@@ -2649,7 +2649,7 @@ function init() {
         if (
             Number.isInteger(savedSpeeds[id]) &&
             savedSpeeds[id] >= 40 &&
-            savedSpeeds[id] <= 200
+            savedSpeeds[id] <= 500
         ) {
             $("real-speed-" + id).value =
                 savedSpeeds[id];
@@ -2857,8 +2857,8 @@ function addMotionRow(
                 <input
                     type="number"
                     step="1"
-                    min="${i < 4 ? -150 : 300}"
-                    max="${i < 4 ? 150 : 8000}"
+                    min="${i < 4 ? -600 : 300}"
+                    max="${i < 4 ? 600 : 8000}"
                     value="${v}"
                 >
             </td>
@@ -2919,7 +2919,7 @@ function motionRows() {
             ) ||
 
             row.slice(0, 4).some(
-                v => Math.abs(v) > 150
+                v => Math.abs(v) > 600
             ) ||
 
             row[4] < 300 ||
@@ -2927,7 +2927,7 @@ function motionRows() {
         )
     ) {   
     throw Error(
-        "1..12 steps; offsets -150..150; " +
+        "1..12 steps; offsets -600..600; " +
         "hold 300..8000 ms"
 );
 
@@ -3084,11 +3084,11 @@ async function rlSaveEmotionSpeeds(name) {
             text === "" ||
             !Number.isInteger(value) ||
             value < 40 ||
-            value > 200
+            value > 500
         ) {
             throw Error(
                 "Servo " + id +
-                " velocity must be 40..200 RAW"
+                " velocity must be 40..500 RAW"
             );
         }
 
@@ -3145,7 +3145,7 @@ function rlInitEmotionSpeedEditor() {
                     type="number"
                     id="emotion-speed-${id}"
                     min="40"
-                    max="200"
+                    max="500"
                     step="1"
                     value="80"
                 >
