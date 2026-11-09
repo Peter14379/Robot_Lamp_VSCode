@@ -12,3 +12,5 @@ __pycache__/
 data/cpg_parameter_results.csv
 data/hormone_cpg_bridge.csv
 emotion_trace_backup.csv
+data/perception_events.csv
+emotion_trace.csv
