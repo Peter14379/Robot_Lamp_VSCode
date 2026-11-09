@@ -9,3 +9,6 @@ venv/
 index_backup.html
 __pycache__/
 *.pyc
+data/cpg_parameter_results.csv
+data/hormone_cpg_bridge.csv
+emotion_trace_backup.csv
