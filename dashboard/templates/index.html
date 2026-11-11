@@ -343,6 +343,76 @@ body.sim .real-only {
     padding:6px 9px;
 }
 
+
+/* RL_HORMONE_SCREEN_TAB_V1 */
+#rl-monitor {
+    display: none;
+}
+#rl-screen-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin: 16px 0;
+    padding: 13px;
+    background: #12263c;
+    border: 1px solid #2a4964;
+    border-radius: 12px;
+}
+#rl-screen-tabs button {
+    flex: 0 1 auto;
+}
+
+
+/* RL_TEST_GRAPHS_V1 */
+
+#rl-test-graphs canvas {
+    width: 100%;
+    height: 215px;
+    display: block;
+    background: #081b2e;
+    border: 1px solid #385a78;
+    border-radius: 10px;
+}
+
+#rl-test-graphs .rl-test-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0,1fr));
+    gap: 16px;
+    margin-top: 14px;
+}
+
+#rl-test-graphs .rl-test-wide {
+    grid-column: 1 / -1;
+}
+
+#rl-test-graphs h3 {
+    margin: 6px 0 10px;
+}
+
+#rl-test-graphs .rl-test-actions {
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    margin-top: 14px;
+}
+
+#rl-test-graphs .rl-test-actions label {
+    min-width: 185px;
+    max-width: 225px;
+    color: #a9c1d4;
+}
+
+#rl-test-graphs .rl-test-actions select {
+    margin-top: 6px;
+}
+
+@media(max-width:750px) {
+    #rl-test-graphs .rl-test-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
 </style>
 </head>
 
@@ -487,6 +557,23 @@ body.sim .real-only {
             </p>
 
             <div id="servo-rows"></div>
+
+            <!-- RL_GO_ZERO_ALL_V1 -->
+            <div class="actions real-only">
+                <button
+                    type="button"
+                    class="primary"
+                    id="go-zero-all"
+                >
+                    GO TO ZERO ALL (4 SERVOS)
+                </button>
+            </div>
+
+            <p class="muted real-only">
+                DISARM Emotion first.
+                Return Servo 1-4 to saved Zero,
+                one by one at RAW 80.
+            </p>
 
             <div class="actions sim-only">
                 <button id="fk-preview">Preview FK</button>
@@ -894,6 +981,48 @@ body.sim .real-only {
         กำลังอ่านข้อมูล...
     </p>
 
+
+<!-- RL_SPEED_MONITOR_V1 -->
+<div class="rl-group" style="margin:16px 0;padding:16px;
+    border:1px solid #385a78;border-radius:12px;">
+
+    <h3>Hormone / Servo Speed - LIVE</h3>
+    <p id="rsm-state" class="muted">Connecting...</p>
+
+    <div style="display:grid;
+        grid-template-columns:repeat(auto-fit,minmax(135px,1fr));
+        gap:10px;">
+
+        <div class="metric">
+            <small>Hormone (0-1)</small>
+            <strong id="rsm-h">--</strong>
+        </div>
+
+        <div class="metric">
+            <small>Target Speed</small>
+            <strong id="rsm-target">--</strong>
+        </div>
+
+        <div class="metric">
+            <small>Filtered Speed</small>
+            <strong id="rsm-filtered">--</strong>
+        </div>
+
+        <div class="metric">
+            <small>Applied Speed</small>
+            <strong id="rsm-applied">--</strong>
+        </div>
+    </div>
+
+    <p id="rsm-cpg" style="margin-top:14px;">
+        CPG: Waiting...
+    </p>
+
+    <small>
+        RAW = servo speed command not measured as RPM value
+    </small>
+</div>
+
     <div class="rl-states">
         <span>
             Emotion:
@@ -958,6 +1087,79 @@ body.sim .real-only {
         </div>
 
     </div>
+
+
+<!-- RL_TEST_GRAPHS_V1 -->
+<div id="rl-test-graphs" class="rl-group" style="margin-top:18px">
+  <h3>Servo / Hormone / Speed - Live Test Graphs</h3>
+  <p class="rl-note">
+    Charts 2 show Hormone 2 and Servo data
+    | Live data updated automatically
+  </p>
+
+  <div class="rl-test-grid">
+    <div>
+      <h3>Hormone by Emotion (0-1)</h3>
+      <canvas id="rl-graph-h"></canvas>
+    </div>
+
+    <div>
+      <h3>Target / Filtered / Applied Speed (RAW)</h3>
+      <canvas id="rl-graph-speed"></canvas>
+    </div>
+
+    <div class="rl-test-wide">
+      <h3>Servo Actual Position 1-4 (ticks)</h3>
+      <canvas id="rl-graph-servo"></canvas>
+    </div>
+  </div>
+
+  <p id="rl-graph-state" class="rl-note">
+    Select expected emotion...
+  </p>
+
+  <p id="rl-graph-emotions" class="rl-note">
+    Test results: -
+  </p>
+
+  <h3 style="margin-top:18px">
+    Emotion Accuracy / Integrated Test
+  </h3>
+
+  <div class="rl-test-actions">
+    <label>
+      Expected emotion
+      <select id="rl-test-expected">
+        <option>IDLE</option>
+        <option>HAPPY</option>
+        <option>SURPRISED</option>
+        <option>SAD</option>
+        <option>SLEEPY</option>
+      </select>
+    </label>
+
+    <button type="button" id="rl-test-mark">
+      Record 1 trial
+    </button>
+
+    <button type="button" id="rl-test-record">
+      Clear test results
+    </button>
+
+    <button type="button" id="rl-test-csv">
+      Export CSV
+    </button>
+  </div>
+
+  <p id="rl-test-score" class="rl-note">
+    Recorded 0 trials
+  </p>
+
+  <p class="rl-note">
+    Servo Graph shows Actual position in ticks, not measured RPM
+    | SLEEPY low hormone automatic rest
+  </p>
+</div>
 
 </section>
 </div>
@@ -1477,6 +1679,9 @@ function buttons() {
             )
         );
 
+    $("go-zero-all").disabled =
+        !ready || live.emotion_armed;
+
     $("arm-home").disabled =
         !ready ||
         !IDS.every(id =>
@@ -1846,6 +2051,124 @@ async function moveReal(
 // =====================================
 // CANCEL
 // =====================================
+
+// RL_GO_ZERO_ALL_V1
+async function goZeroAllReal() {
+    if (working || mode !== "real") return;
+
+    setWorking(true);
+
+    try {
+        await refresh();
+
+        if (!live.connected || !live.info_ready) {
+            throw Error("ESP32 / Servo not ready");
+        }
+
+        if (live.busy) {
+            throw Error("Another command is running");
+        }
+
+        if (live.emotion_armed) {
+            throw Error(
+                "DISARM Emotion before GO ZERO ALL"
+            );
+        }
+
+        // Validate all four servos BEFORE moving.
+        const plan = IDS.map(id => {
+            const s = servo(id);
+
+            if (
+                !s ||
+                !s.online ||
+                !Number.isInteger(s.actual) ||
+                !Number.isInteger(s.zero) ||
+                !Number.isInteger(s.min) ||
+                !Number.isInteger(s.max)
+            ) {
+                throw Error(
+                    `Servo ${id}: missing feedback or Zero`
+                );
+            }
+
+            if (
+                s.zero < s.min + 20 ||
+                s.zero > s.max - 20
+            ) {
+                throw Error(
+                    `Servo ${id}: Zero outside safe limits`
+                );
+            }
+
+            const distance = Math.abs(
+                s.zero - s.actual
+            );
+
+            if (distance > 300) {
+                throw Error(
+                    `Servo ${id}: ${distance} ticks ` +
+                    "exceeds 300. Move manually first."
+                );
+            }
+
+            return {
+                id: id,
+                target: s.zero
+            };
+        });
+
+        message(
+            "fk-result",
+            "Returning all four servos to Zero..."
+        );
+
+        // One click, four sequential MOVE commands.
+        for (const item of plan) {
+            const result = await post(
+                `/api/servo/${item.id}/move`,
+                {
+                    target: item.target,
+                    speed: 80
+                }
+            );
+
+            $("target-" + item.id).value =
+                item.target;
+
+            log(
+                `GO ZERO Servo ${item.id}: ` +
+                `${result.actual}/${item.target}`
+            );
+        }
+
+        await refresh();
+
+        message(
+            "fk-result",
+            "GO ZERO ALL completed: Servo 1-4"
+        );
+
+        log("GO ZERO ALL COMPLETED");
+
+    } catch (e) {
+        message(
+            "fk-result",
+            "GO ZERO ALL stopped: " + e.message,
+            true
+        );
+
+        log("GO ZERO ALL ERROR: " + e.message);
+
+        try {
+            await refresh();
+        } catch (_) {}
+
+    } finally {
+        setWorking(false);
+        render();
+    }
+}
 
 async function cancelReal() {
     try {
@@ -2751,6 +3074,8 @@ function init() {
     $("fk-preview").onclick = previewFK;
     $("fk-move").onclick = () => moveSim();
 
+    $("go-zero-all").onclick = goZeroAllReal;
+
     $("fk-home").onclick =
         () => moveSim(
             IDS,
@@ -3426,6 +3751,725 @@ rlInitEmotionSpeedEditor();
         1000
     );
 
+})();
+</script>
+
+
+<script>
+/* RL_SPEED_MONITOR_JS_V1 */
+(() => {
+    "use strict";
+
+    const el = id => document.getElementById(id);
+
+    let readingSpeed = false;
+    let readingCpg = false;
+
+    async function getJSON(url) {
+        const controller = new AbortController();
+        const timer = setTimeout(
+            () => controller.abort(), 5000
+        );
+
+        try {
+            const response = await fetch(url, {
+                cache: "no-store",
+                signal: controller.signal
+            });
+
+            if (!response.ok) {
+                throw Error("HTTP " + response.status);
+            }
+
+            const data = await response.json();
+
+            if (data.ok === false) {
+                throw Error(data.error || "API error");
+            }
+
+            return data;
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
+    const show = (id, value) => {
+        el(id).textContent = value ?? "--";
+    };
+
+    async function readSpeed() {
+        if (readingSpeed) return;
+        readingSpeed = true;
+
+        try {
+            const d = await getJSON("/api/hormone/drive");
+
+            show("rsm-h",
+                Number(d.hormone).toFixed(2)
+            );
+
+            show("rsm-target",
+                d.target_speed_raw ?? d.speed_raw
+            );
+
+            show("rsm-filtered",
+                d.filtered_speed_raw
+            );
+
+            show("rsm-applied",
+                d.last_applied_speed_raw
+            );
+
+            const isLive = d.data_status === "LIVE";
+
+            show(
+                "rsm-state",
+                (isLive ? "LIVE" : "STALE") +
+                " | " +
+                (d.armed ? "ARMED" : "DISARMED")
+            );
+
+            el("rsm-state").style.color =
+                isLive ? "#76e7c4" : "#ffd18a";
+
+        } catch (e) {
+            show("rsm-state", "Speed API: " + e.message);
+            el("rsm-state").style.color = "#ff9da6";
+        } finally {
+            readingSpeed = false;
+        }
+    }
+
+    async function readCpg() {
+        if (readingCpg) return;
+        readingCpg = true;
+
+        try {
+            const d = await getJSON(
+                "/api/emotion/cpg-status"
+            );
+
+            const status = String(d.status ?? "");
+
+            const find = pattern =>
+                status.match(pattern)?.[1] ?? "--";
+
+            const emotion = find(/Emotion=([A-Z_]+)/);
+            const step = find(/STEP=([0-9]+\/[0-9]+)/);
+            const active = find(/ACTIVE=([01])/);
+            const error = find(/LAST=([^ ]+)/);
+
+            show(
+                "rsm-cpg",
+                "CPG: " + emotion +
+                " | Step " + step +
+                " | Active=" + active +
+                " | Last=" + error
+            );
+
+        } catch (e) {
+            show("rsm-cpg", "CPG API: " + e.message);
+        } finally {
+            readingCpg = false;
+        }
+    }
+
+    readSpeed();
+    readCpg();
+
+    setInterval(readSpeed, 1500);
+    setInterval(readCpg, 3000);
+})();
+</script>
+
+
+<script>
+/* Hormone Monitor full-width screen */
+(() => {
+    "use strict";
+
+    const columns =
+        document.querySelector("main .columns");
+
+    const tabs =
+        document.querySelector(".columns .tabs");
+
+    const monitor =
+        document.getElementById("rl-monitor");
+
+    if (!columns || !tabs || !monitor) {
+        console.error(
+            "Hormone tab: dashboard layout not found"
+        );
+        return;
+    }
+
+    const button = document.createElement("button");
+    button.id = "tab-hormone";
+    button.type = "button";
+    button.textContent = "Hormone Monitor";
+
+    tabs.appendChild(button);
+    tabs.id = "rl-screen-tabs";
+
+    // Move the existing tab bar above the FK/IK columns.
+    // Existing button handlers and servo controls are kept.
+    columns.before(tabs);
+
+    function openMonitor() {
+        columns.style.display = "none";
+        monitor.style.display = "block";
+
+        tabs.querySelectorAll("button").forEach(
+            b => b.classList.toggle(
+                "active",
+                b.id === "tab-hormone"
+            )
+        );
+
+        window.scrollTo(0, 0);
+    }
+
+    function openControl() {
+        columns.style.display = "";
+        monitor.style.display = "none";
+        button.classList.remove("active");
+        window.scrollTo(0, 0);
+    }
+
+    button.addEventListener("click", openMonitor);
+
+    // Retain the original FK, IK, and Setup handlers.
+    for (const name of ["fk", "ik", "setup"]) {
+        document.getElementById(
+            "tab-" + name
+        ).addEventListener("click", openControl);
+    }
+
+    // Correct a previously garbled explanatory label.
+    monitor.querySelectorAll("small").forEach(
+        element => {
+            if (element.textContent.includes("RAW =")) {
+                element.textContent =
+                    "RAW = command speed, not measured RPM";
+            }
+        }
+    );
+
+    // Initial screen: FK / IK controls.
+    columns.style.display = "";
+    monitor.style.display = "none";
+
+    console.log("Hormone Monitor tab ready");
+})();
+</script>
+
+
+<script>
+/* RL_TEST_GRAPHS_JS_V1 */
+(() => {
+    "use strict";
+
+    const $ = id => document.getElementById(id);
+
+    const MAX = 60;
+    const samples = [];
+    const log = [];
+    const trials = [];
+
+    let recording = false;
+    let busy = false;
+    let last = null;
+
+    const hormones = ["HAPPY", "SURPRISED", "SAD"];
+    const servos = ["S1", "S2", "S3", "S4"];
+
+    const colors = [
+        "#76e7c4",
+        "#ffd66b",
+        "#69aaff",
+        "#ca91ff"
+    ];
+
+    const number = value => {
+        if (
+            value === null ||
+            value === undefined ||
+            value === ""
+        ) return null;
+
+        const result = Number(value);
+        return Number.isFinite(result) ? result : null;
+    };
+
+    const text = id =>
+        ($(id)?.textContent || "").trim();
+
+    const value = id => number(text(id));
+
+    function drawGraph(id, series, min, max) {
+        const canvas = $(id);
+        const ctx = canvas.getContext("2d");
+
+        const W = canvas.width = 950;
+        const H = canvas.height = 215;
+
+        const left = 48;
+        const right = 15;
+        const top = 16;
+        const bottom = 30;
+
+        const posX = index =>
+            left +
+            index * (W - left - right) / (MAX - 1);
+
+        const posY = val =>
+            H - bottom -
+            (val - min) * (H - top - bottom) /
+            (max - min);
+
+        ctx.fillStyle = "#081b2e";
+        ctx.fillRect(0, 0, W, H);
+
+        ctx.font = "13px Segoe UI, sans-serif";
+
+        for (let i = 0; i <= 4; i++) {
+            const v = min + (max - min) * i / 4;
+            const y = posY(v);
+
+            ctx.strokeStyle = "#244158";
+            ctx.beginPath();
+            ctx.moveTo(left, y);
+            ctx.lineTo(W - right, y);
+            ctx.stroke();
+
+            ctx.fillStyle = "#a9c1d4";
+            ctx.fillText(
+                String(Number(v.toFixed(1))),
+                4, y + 4
+            );
+        }
+
+        ctx.fillStyle = "#a9c1d4";
+        ctx.fillText(
+            "Latest data at right",
+            left, H - 7
+        );
+
+        series.forEach((line, j) => {
+            ctx.strokeStyle =
+                line.color || colors[j % 4];
+
+            ctx.lineWidth = 2.5;
+            ctx.beginPath();
+
+            let drawing = false;
+
+            for (let i = 0; i < samples.length; i++) {
+                const v = line.get(samples[i]);
+
+                if (
+                    v === null ||
+                    !Number.isFinite(v)
+                ) {
+                    drawing = false;
+                    continue;
+                }
+
+                const x = posX(
+                    MAX - samples.length + i
+                );
+
+                const y = posY(
+                    Math.max(min, Math.min(max, v))
+                );
+
+                if (!drawing) {
+                    ctx.moveTo(x, y);
+                    drawing = true;
+                } else {
+                    ctx.lineTo(x, y);
+                }
+            }
+
+            ctx.stroke();
+
+            ctx.fillStyle = ctx.strokeStyle;
+            ctx.fillRect(
+                W - 165,
+                10 + j * 17,
+                12, 3
+            );
+
+            ctx.fillText(
+                line.name,
+                W - 148,
+                15 + j * 17
+            );
+        });
+    }
+
+    function render() {
+        drawGraph(
+            "rl-graph-h",
+            hormones.map((name, i) => ({
+                name,
+                color: colors[i],
+                get: row => row.h[name]
+            })),
+            0, 1
+        );
+
+        drawGraph(
+            "rl-graph-speed",
+            [
+                {
+                    name: "Target",
+                    color: colors[1],
+                    get: row => row.target
+                },
+                {
+                    name: "Filtered",
+                    color: colors[0],
+                    get: row => row.filtered
+                },
+                {
+                    name: "Applied",
+                    color: colors[2],
+                    get: row => row.applied
+                }
+            ],
+            0, 500
+        );
+
+        drawGraph(
+            "rl-graph-servo",
+            servos.map((name, i) => ({
+                name,
+                color: colors[i],
+                get: row => row.servo[i]
+            })),
+            0, 1023
+        );
+
+        const changes = [];
+
+        for (const row of samples) {
+            if (
+                changes.at(-1)?.emotion !== row.emotion
+            ) {
+                changes.push({
+                    emotion: row.emotion,
+                    time: row.clock
+                });
+            }
+        }
+
+        $("rl-graph-emotions").textContent =
+            "Emotion history: " +
+            (
+                changes.slice(-10).map(
+                    e => e.time + " " + e.emotion
+                ).join(" -> ") || "-"
+            );
+
+        const correct = trials.filter(
+            x => x.correct
+        ).length;
+
+        const brainCorrect = trials.filter(
+            x => x.brain_correct
+        ).length;
+
+        const total = trials.length;
+
+        const percent = count =>
+            total
+                ? (100 * count / total).toFixed(1)
+                : "-";
+
+        $("rl-test-score").textContent =
+            `Recorded ${total} trials | ` +
+            `Expression ${correct}/${total} ` +
+            `(${percent(correct)}%) | ` +
+            `Brain ${brainCorrect}/${total} ` +
+            `(${percent(brainCorrect)}%) | ` +
+            `Correct ${
+                log.filter(x => x.kind === "sample").length
+            } trials`;
+    }
+
+    function readDashboard() {
+        const speedState = text("rsm-state");
+        const hormoneState = text("rl-monitor-status");
+
+        const live =
+            speedState.includes("LIVE") &&
+            !speedState.includes("STALE") &&
+            hormoneState.includes("LIVE") &&
+            !hormoneState.includes("STALE");
+
+        return {
+            kind: "sample",
+            iso: new Date().toISOString(),
+            clock: new Date().toLocaleTimeString("th-TH"),
+
+            emotion: text("rl-emotion"),
+            brain: text("rl-brain"),
+            gesture: text("rl-gesture"),
+            mode: text("rl-mode"),
+
+            h: Object.fromEntries(
+                hormones.map(name => [
+                    name,
+                    value("rl-h-value-" + name)
+                ])
+            ),
+
+            motor: value("rsm-h"),
+            target: value("rsm-target"),
+            filtered: value("rsm-filtered"),
+            applied: value("rsm-applied"),
+
+            armed:
+                speedState.includes("ARMED") &&
+                !speedState.includes("DISARMED"),
+
+            live,
+            cpg: text("rsm-cpg"),
+            servo: [null, null, null, null],
+            connected: false
+        };
+    }
+
+    async function sample() {
+        if (busy || document.hidden) return;
+
+        const area = $("rl-monitor");
+
+        if (
+            !area ||
+            getComputedStyle(area).display === "none"
+        ) return;
+
+        busy = true;
+
+        try {
+            const controller = new AbortController();
+
+            const timer = setTimeout(
+                () => controller.abort(),
+                1600
+            );
+
+            let response;
+
+            try {
+                response = await fetch(
+                    "/api/status",
+                    {
+                        cache: "no-store",
+                        signal: controller.signal
+                    }
+                );
+            } finally {
+                clearTimeout(timer);
+            }
+
+            if (!response.ok) {
+                throw Error(
+                    "HTTP " + response.status
+                );
+            }
+
+            const data = await response.json();
+
+            if (data.ok === false) {
+                throw Error(
+                    data.error || "API error"
+                );
+            }
+
+            const row = readDashboard();
+
+            row.connected = !!data.connected;
+
+            if (
+                data.connected &&
+                Array.isArray(data.servos)
+            ) {
+                for (let i = 0; i < 4; i++) {
+                    const servo = data.servos.find(
+                        s => Number(s.id) === i + 1
+                    );
+
+                    row.servo[i] = servo?.online
+                        ? number(servo.actual)
+                        : null;
+                }
+            }
+
+            last = row;
+            samples.push(row);
+
+            if (samples.length > MAX) {
+                samples.shift();
+            }
+
+            if (recording) {
+                log.push({
+                    ...row,
+                    kind: "sample"
+                });
+            }
+
+            $("rl-graph-state").textContent =
+                `${row.live ? "LIVE" : "STALE"} | ` +
+                `${row.armed ? "ARMED" : "DISARMED"} | ` +
+                `Servo ${
+                    row.connected ? "connected" : "offline"
+                } | ${row.clock} | ${row.cpg}`;
+
+            render();
+
+        } catch (error) {
+            $("rl-graph-state").textContent =
+                "Test result: " +
+                error.message;
+        } finally {
+            busy = false;
+        }
+    }
+
+    $("rl-test-record").addEventListener(
+        "click",
+        () => {
+            recording = !recording;
+
+            $("rl-test-record").textContent =
+                recording
+                    ? "PASS"
+                    : "FAIL";
+        }
+    );
+
+    $("rl-test-mark").addEventListener(
+        "click",
+        () => {
+            if (
+                !last ||
+                Date.now() - Date.parse(last.iso) > 5000 ||
+                !last.live
+            ) {
+                alert(
+                    "Camera data LIVE available"
+                );
+                return;
+            }
+
+            const expected =
+                $("rl-test-expected").value;
+
+            const result = {
+                ...last,
+                kind: "test",
+                expected,
+                correct: last.emotion === expected,
+                brain_correct:
+                    last.brain === expected
+            };
+
+            trials.push(result);
+            log.push(result);
+
+            render();
+        }
+    );
+
+    $("rl-test-csv").addEventListener(
+        "click",
+        () => {
+            if (!log.length) {
+                alert("Test result saved");
+                return;
+            }
+
+            const columns = [
+                "kind", "iso",
+                "emotion", "brain",
+                "gesture", "mode",
+                "expected", "correct",
+                "brain_correct",
+                "live", "armed", "connected",
+                "h_happy", "h_surprised", "h_sad",
+                "motor", "target",
+                "filtered", "applied",
+                "servo1", "servo2",
+                "servo3", "servo4",
+                "cpg"
+            ];
+
+            const escapeCSV = v =>
+                '"' +
+                String(v ?? "").replaceAll('"', '""') +
+                '"';
+
+            const lines = [
+                columns.join(",")
+            ];
+
+            for (const row of log) {
+                const record = {
+                    ...row,
+                    h_happy: row.h?.HAPPY,
+                    h_surprised: row.h?.SURPRISED,
+                    h_sad: row.h?.SAD
+                };
+
+                row.servo?.forEach((v, i) => {
+                    record["servo" + (i + 1)] = v;
+                });
+
+                lines.push(
+                    columns.map(
+                        k => escapeCSV(record[k])
+                    ).join(",")
+                );
+            }
+
+            const csv = new Blob(
+                [
+                    "\uFEFF",
+                    lines.join("\r\n")
+                ],
+                {
+                    type: "text/csv;charset=utf-8"
+                }
+            );
+
+            const url = URL.createObjectURL(csv);
+            const a = document.createElement("a");
+
+            a.href = url;
+
+            a.download =
+                "robot_lamp_test_" +
+                new Date().toISOString()
+                    .replaceAll(":", "-")
+                    .slice(0, 19) +
+                ".csv";
+
+            a.click();
+
+            setTimeout(
+                () => URL.revokeObjectURL(url),
+                1000
+            );
+        }
+    );
+
+    sample();
+    setInterval(sample, 2000);
 })();
 </script>
 

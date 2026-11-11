@@ -39,7 +39,7 @@ ZERO_FILE = BASE / "servo_zeros.json"
 HTML_FILE = BASE / "templates" / "index.html"
 
 MARGIN = 20
-TOLERANCE = 10
+TOLERANCE = 20
 
 DIRECT_MOVE_MAX_DELTA = 300
 DIRECT_MOVE_TIMEOUT = 15.0
@@ -1505,7 +1505,7 @@ def api_emotion_arm():
                         "to hardware limit"
                     )
 
-                if abs(s["actual"] - z) > 10:
+                if abs(s["actual"] - z) > TOLERANCE:
                     raise ValueError(
                         f"Servo {i} not at Home: "
                         f"actual {s['actual']}, "
@@ -1596,10 +1596,19 @@ def api_emotion_disarm():
 # RL_HORMONE_CPG_V1
 # Hormone updates are independent of emotion changes.
 
+
+# RL_HORMONE_SPEED_FILTER_V1
+# Filter outgoing motor commands only.
+# Original hormone production/decay is unchanged.
+
+HORMONE_FILTER_RISE_TAU = 1.0
+HORMONE_FILTER_FALL_TAU = 1.4
+HORMONE_FILTER_SLEW_PER_SECOND = 0.35
+
+
 @app.post("/api/hormone/drive")
 def api_hormone_drive():
     payload = request.get_json(silent=True) or {}
-
     value = payload.get("hormone")
 
     try:
@@ -1613,46 +1622,145 @@ def api_hormone_drive():
 
     except (ValueError, TypeError) as exc:
         return jsonify(
-            ok=False,
-            error=str(exc)
+            ok=False, error=str(exc)
         ), 400
 
-    speed = round(40 + 460 * h)
+    now = time.monotonic()
+    target_raw = round(40 + 460 * h)
 
     with state_lock:
-        state["hormone_value"] = round(h, 4)
-        state["hormone_speed_raw"] = speed
-        state["hormone_seen_at"] = time.monotonic()
-
         armed = bool(state["emotion_armed"])
         busy = bool(state["busy"])
 
+        previous_at = state.get(
+            "hormone_filter_at"
+        )
+        previous = float(
+            state.get("hormone_filtered_value", 0.0)
+        )
+
+        # Start slowly after first sample
+        # or after an input interruption.
+        if (
+            previous_at is None
+            or now - previous_at > 3.0
+        ):
+            previous = 0.0
+            dt = 0.8
+        else:
+            dt = max(
+                0.0,
+                min(now - previous_at, 2.0)
+            )
+
+        # Separate smoothing for rising
+        # and falling hormone.
+        tau = (
+            HORMONE_FILTER_RISE_TAU
+            if h >= previous
+            else HORMONE_FILTER_FALL_TAU
+        )
+
+        alpha = (
+            dt / (tau + dt)
+            if dt > 0.0 else 0.0
+        )
+
+        desired = previous + alpha * (
+            h - previous
+        )
+
+        # Limit sudden changes in
+        # the motor hormone command.
+        max_delta = (
+            HORMONE_FILTER_SLEW_PER_SECOND * dt
+        )
+
+        filtered = previous + max(
+            -max_delta,
+            min(
+                max_delta,
+                desired - previous
+            )
+        )
+
+        filtered = max(
+            0.0,
+            min(1.0, filtered)
+        )
+
+        # Do not retain previous speed
+        # when the system is disarmed.
+        if not armed:
+            filtered = 0.0
+
+        filtered_raw = round(
+            40 + 460 * filtered
+        )
+
+        # Keep the original hormone value
+        # for monitoring and comparison.
+        state["hormone_value"] = round(h, 4)
+        state["hormone_speed_raw"] = target_raw
+        state["hormone_filtered_value"] = round(
+            filtered, 4
+        )
+        state["hormone_filtered_speed_raw"] = (
+            filtered_raw
+        )
+        state["hormone_filter_at"] = now
+        state["hormone_seen_at"] = now
+
+    response = dict(
+        ok=True,
+        hormone=round(h, 4),
+        speed_raw=target_raw,
+        target_speed_raw=target_raw,
+        filtered_hormone=round(filtered, 4),
+        filtered_speed_raw=filtered_raw,
+        armed=armed
+    )
+
     if not armed or busy:
         return jsonify(
-            ok=True,
+            **response,
             applied=False,
-            reason="NOT_ARMED" if not armed else "BUSY",
-            hormone=h,
-            speed_raw=speed
+            reason=(
+                "NOT_ARMED"
+                if not armed
+                else "BUSY"
+            )
         )
 
     try:
+        # Send the FILTERED hormone
+        # to ESP32 CPG, not the raw one.
         with serial_lock:
             transact(
-                f"CPG H {round(h * 1000)}",
+                f"CPG H {round(filtered * 1000)}",
                 3
             )
 
+        with state_lock:
+            state["hormone_applied_value"] = (
+                round(filtered, 4)
+            )
+            state["hormone_applied_speed_raw"] = (
+                filtered_raw
+            )
+            state["hormone_applied_at"] = (
+                time.monotonic()
+            )
+
         return jsonify(
-            ok=True,
-            applied=True,
-            hormone=h,
-            speed_raw=speed
+            **response,
+            applied=True
         )
 
     except Exception as exc:
         return jsonify(
-            ok=False,
+            **{**response, "ok": False},
+            applied=False,
             error=str(exc)
         ), 503
 
@@ -1660,22 +1768,60 @@ def api_hormone_drive():
 @app.get("/api/hormone/drive")
 def api_hormone_drive_status():
     with state_lock:
-        h = state.get("hormone_value", 0.0)
-        speed = state.get("hormone_speed_raw", 40)
-        seen = state.get("hormone_seen_at", 0.0)
+        h = state.get(
+            "hormone_value", 0.0
+        )
+        target = state.get(
+            "hormone_speed_raw", 40
+        )
+        filtered_h = state.get(
+            "hormone_filtered_value", 0.0
+        )
+        filtered_raw = state.get(
+            "hormone_filtered_speed_raw", 40
+        )
+        seen = state.get(
+            "hormone_seen_at", 0.0
+        )
         armed = state["emotion_armed"]
+        applied_at = state.get(
+            "hormone_applied_at", 0.0
+        )
+        last_applied = state.get(
+            "hormone_applied_speed_raw"
+        )
+
+    now = time.monotonic()
 
     age = (
-        time.monotonic() - seen
+        now - seen
         if seen > 0 else None
+    )
+
+    applied_fresh = bool(
+        armed
+        and applied_at
+        and (now - applied_at) < 3.0
     )
 
     return jsonify(
         ok=True,
         hormone=h,
-        speed_raw=speed,
+        speed_raw=target,
+        target_speed_raw=target,
+        filtered_hormone=filtered_h,
+        filtered_speed_raw=filtered_raw,
+        last_applied_speed_raw=(
+            last_applied
+            if applied_fresh
+            else None
+        ),
         armed=armed,
-        age_s=round(age, 2) if age is not None else None,
+        age_s=(
+            round(age, 2)
+            if age is not None
+            else None
+        ),
         data_status=(
             "LIVE"
             if age is not None and age < 3.0

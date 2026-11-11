@@ -2490,10 +2490,86 @@ def main():
 
                     # ======================
                     # GUI HEADER
-                    # ======================
+                    # RL_CAMERA_STATE_OVERLAY_V1
+                    # Use existing Brain and autonomous variables.
+                    # No changes to motion or recognition logic.
+
+                    if sleeping:
+                        sleep_status = "ON (AUTO)"
+                        sleep_timer = "LOW HORMONE TIME REACHED"
+
+                    elif expression == "SLEEPY":
+                        sleep_status = "ON (GESTURE)"
+                        sleep_timer = "SLEEPY COMMAND"
+
+                    elif (
+                        low_hormone_since is not None
+                        and not hand_seen
+                        and not voice_active
+                    ):
+                        elapsed_sleep = max(
+                            0.0,
+                            now - low_hormone_since
+                        )
+
+                        remaining_sleep = max(
+                            0.0,
+                            HORMONE_SLEEP_SECONDS - elapsed_sleep
+                        )
+
+                        sleep_status = "WAIT"
+                        sleep_timer = (
+                            f"{elapsed_sleep:.1f}/"
+                            f"{HORMONE_SLEEP_SECONDS:.0f}s "
+                            f"| LEFT: {remaining_sleep:.1f}s"
+                        )
+
+                    else:
+                        sleep_status = "OFF"
+                        sleep_timer = "TIMER RESET"
+
+                    track_text = (
+                        f"FACE TRACK: {direction} "
+                        f"X:{face_x:.2f} Y:{face_y:.2f}"
+                        if face_x is not None
+                        else "FACE TRACK: NONE"
+                    )
+
+                    # RL_CAMERA_HORMONE_SINGLE_V2
+                    lines = [
+                        (
+                            f"EXPRESSION: {expression} "
+                            f"| MODE: {mode}"
+                        ),
+                        (
+                            f"GESTURE: {stable} "
+                            f"| BRAIN: {decision.emotion}"
+                        ),
+                        (
+                            f"HAND: {int(hand_seen)} "
+                            f"| VERIFIED FACES: {len(faces)} "
+                            f"| FPS: {fps:.1f}"
+                        ),
+                        (
+                            f"HORMONE: {motor_drive:.2f} / 1.00"
+                        ),
+                        (
+                            f"CURIOSITY: {behavior.curiosity:.2f} "
+                            f"| ENERGY: {behavior.energy:.2f} "
+                            f"| AROUSAL: {behavior.arousal:.2f}"
+                        ),
+                        (
+                            f"SLEEP: {sleep_status} "
+                            f"| {sleep_timer}"
+                        ),
+                        track_text,
+                    ]
+
+                    line_step = 23
+                    header_height = 12 + line_step * len(lines)
 
                     header = np.zeros(
-                        (170, width, 3),
+                        (header_height, width, 3),
                         dtype=np.uint8
                     )
 
@@ -2504,60 +2580,21 @@ def main():
 
                     ink = (
                         (0, 0, 0)
-                        if expression in (
-                            "HAPPY",
-                            "SURPRISED"
-                        )
+                        if expression in ("HAPPY", "SURPRISED")
                         else (255, 255, 255)
                     )
 
-                    track_text = (
-                        f"FACE TRACK: {direction} "
-                        f"X:{face_x:.2f} Y:{face_y:.2f}"
-                        if face_x is not None
-                        else "FACE TRACK: NONE"
+                    font_scale = (
+                        0.48 if width >= 1000 else 0.37
                     )
 
-                    lines = [
-                        (
-                            f"EXPRESSION: {expression} "
-                            f"| MODE: {mode}"
-                        ),
-                        (
-                            f"Gesture: {stable} "
-                            f"| Brain: {decision.emotion}"
-                        ),
-                        (
-                            f"Verified faces: {len(faces)} "
-                            f"| Hand: {int(hand_seen)} "
-                            f"| Motion: {motion_ratio:.3f}"
-                        ),
-                        (
-                            f"H_HAPPY: {decision.hormone.get('HAPPY', 0.0):.2f} "
-                            f"| H_SURPRISED: {decision.hormone.get('SURPRISED', 0.0):.2f} "
-                            f"| H_SAD: {decision.hormone.get('SAD', 0.0):.2f}"
-                        ),
-                        (
-                            f"LOOK: {last_look} "
-                            f"| Transport: {output.mode} "
-                            f"| Process FPS: {fps:.1f}"
-                        ),
-                        track_text,
-                        (
-                            f"H_MOTOR: {motor_drive:.2f} "
-                            f"| Stimulus: {stimulus_max:.2f} "
-                            f"| Speed: {motor_speed_raw} RAW"
-                        )
-                    ]
-
                     for i, line in enumerate(lines):
-
                         cv2.putText(
                             header,
                             line,
-                            (10, 21 + 23 * i),
+                            (10, 21 + line_step * i),
                             cv2.FONT_HERSHEY_SIMPLEX,
-                            0.50,
+                            font_scale,
                             ink,
                             1,
                             cv2.LINE_AA

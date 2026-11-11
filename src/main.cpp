@@ -237,7 +237,7 @@ uint8_t cpgStable = 0;
 uint8_t cpgLastIncomplete = 1;
 
 // RL_CPG_STEP_FIX_V2
-constexpr int CPG_ARRIVAL_TOL = 18;
+constexpr int CPG_ARRIVAL_TOL = 20;
 
 int cpgLastActual[4] = {};
 char cpgLastError[72] = "NONE";
@@ -1219,7 +1219,7 @@ bool armDashboardHome(
             h > (int)hi -
                 SAFE_MARGIN -
                 EMOTION_ARM_MARGIN ||
-            abs((int)pos - h) > 10
+            abs((int)pos - h) > 20
         ) {
             Serial.printf(
                 "[ARM REJECTED] ID=%u "
