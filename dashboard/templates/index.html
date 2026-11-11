@@ -1112,6 +1112,14 @@ body.sim .real-only {
       <h3>Servo Actual Position 1-4 (ticks)</h3>
       <canvas id="rl-graph-servo"></canvas>
     </div>
+    <div class="rl-test-wide">
+      <h3>Emotion / Behavior Activity (0-1)</h3>
+      <p class="rl-note">
+        6 states from live camera / behavior;
+        1 = active, 0 = inactive
+      </p>
+      <canvas id="rl-graph-emotion-all"></canvas>
+    </div>
   </div>
 
   <p id="rl-graph-state" class="rl-note">
@@ -1134,6 +1142,7 @@ body.sim .real-only {
         <option>HAPPY</option>
         <option>SURPRISED</option>
         <option>SAD</option>
+        <option>CURIO</option>
         <option>SLEEPY</option>
       </select>
     </label>
@@ -3982,6 +3991,17 @@ rlInitEmotionSpeedEditor();
     let last = null;
 
     const hormones = ["HAPPY", "SURPRISED", "SAD"];
+
+    // RL_ALL_EMOTION_ACTIVITY_GRAPH_V2
+    const allStates = [
+        "IDLE", "HAPPY", "SURPRISED",
+        "SAD", "CURIO", "SLEEPY"
+    ];
+
+    const stateColors = [
+        "#b4c3d0", "#76e7c4", "#ffd66b",
+        "#69aaff", "#ff994d", "#ca91ff"
+    ];
     const servos = ["S1", "S2", "S3", "S4"];
 
     const colors = [
@@ -4121,6 +4141,18 @@ rlInitEmotionSpeedEditor();
         );
 
         drawGraph(
+            "rl-graph-emotion-all",
+            allStates.map((name, i) => ({
+                name,
+                color: stateColors[i],
+                get: row => row.cameraLive
+                    ? (row.emotion === name ? 1 : 0)
+                    : null
+            })),
+            0, 1
+        );
+
+        drawGraph(
             "rl-graph-speed",
             [
                 {
@@ -4236,6 +4268,9 @@ rlInitEmotionSpeedEditor();
                 !speedState.includes("DISARMED"),
 
             live,
+            cameraLive:
+                hormoneState.includes("LIVE") &&
+                !hormoneState.includes("STALE"),
             cpg: text("rsm-cpg"),
             servo: [null, null, null, null],
             connected: false
