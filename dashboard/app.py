@@ -45,8 +45,7 @@ DIRECT_MOVE_MAX_DELTA = 300
 DIRECT_MOVE_TIMEOUT = 15.0
 
 SPEED_MIN = 40
-SPEED_MAX = 500
-
+SPEED_MAX = 800
 EMOTIONS = (
     "IDLE",
     "HAPPY",
@@ -1349,7 +1348,7 @@ def api_move(sid):
     ):
         return jsonify(
             ok=False,
-            error="Speed must be integer 40..500"
+            error="Speed must be integer 40..800"
         ), 400
 
     with state_lock:
@@ -1721,49 +1720,14 @@ def api_hormone_drive():
         armed=armed
     )
 
-    if not armed or busy:
-        return jsonify(
-            **response,
-            applied=False,
-            reason=(
-                "NOT_ARMED"
-                if not armed
-                else "BUSY"
-            )
-        )
-
-    try:
-        # Send the FILTERED hormone
-        # to ESP32 CPG, not the raw one.
-        with serial_lock:
-            transact(
-                f"CPG H {round(filtered * 1000)}",
-                3
-            )
-
-        with state_lock:
-            state["hormone_applied_value"] = (
-                round(filtered, 4)
-            )
-            state["hormone_applied_speed_raw"] = (
-                filtered_raw
-            )
-            state["hormone_applied_at"] = (
-                time.monotonic()
-            )
-
-        return jsonify(
-            **response,
-            applied=True
-        )
-
-    except Exception as exc:
-        return jsonify(
-            **{**response, "ok": False},
-            applied=False,
-            error=str(exc)
-        ), 503
-
+    # RL_EMOTION_PROFILE_SPEED_ONLY
+    # Hormone is for monitoring and Emotion Brain.
+    # Never use Hormone to command motor speed.
+    return jsonify(
+        **response,
+        applied=False,
+        reason="EMOTION_PROFILE_SPEED_ONLY"
+    )
 
 @app.get("/api/hormone/drive")
 def api_hormone_drive_status():
@@ -1860,10 +1824,7 @@ def api_emotion():
                 sync_motion(e)
 
             # RL_EMOTION_SPEED_V4
-            if (
-                e in SPEED_PROFILE_NAMES
-                and data.get("control_mode") != "hormone"
-            ):
+            if e in SPEED_PROFILE_NAMES:
                 with emotion_speed_lock:
                     selected = emotion_speed_profiles[e].copy()
                 apply_speeds({

@@ -919,7 +919,7 @@ body.sim .real-only {
 
     <h3>
         Velocity for this emotion
-        (RAW 40-500)
+        (RAW 40-800)
     </h3>
 
     <p class="muted">
@@ -1920,10 +1920,10 @@ function speeds() {
         if (
             !Number.isInteger(v) ||
             v < 40 ||
-            v > 500
+            v > 800
         ) {
             throw Error(
-                `Servo ${id}: speed 40..500 RAW`
+                `Servo ${id}: speed 40..800 RAW`
             );
         }
 
@@ -1968,10 +1968,10 @@ async function moveReal(
         if (
             !Number.isInteger(speed) ||
             speed < 40 ||
-            speed > 500
+            speed > 800
         ) {
             throw Error(
-                "Velocity 40..500 RAW"
+                "Velocity 40..800 RAW"
             );
         }
 
@@ -2899,7 +2899,7 @@ function init() {
                         <input
                             type="number"
                             min="40"
-                            max="500"
+                            max="800"
                             step="1"
                             value="80"
                             id="real-speed-${id}"
@@ -3409,11 +3409,11 @@ async function rlSaveEmotionSpeeds(name) {
             text === "" ||
             !Number.isInteger(value) ||
             value < 40 ||
-            value > 500
+            value > 800
         ) {
             throw Error(
                 "Servo " + id +
-                " velocity must be 40..500 RAW"
+                " velocity must be 40..800 RAW"
             );
         }
 
@@ -3470,7 +3470,7 @@ function rlInitEmotionSpeedEditor() {
                     type="number"
                     id="emotion-speed-${id}"
                     min="40"
-                    max="500"
+                    max="800"
                     step="1"
                     value="80"
                 >

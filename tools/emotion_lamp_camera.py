@@ -1826,6 +1826,7 @@ def main():
             "H_MOTOR",
             "MOTOR_SPEED_RAW",
             "STIMULUS_MAX",
+            "H_SLEEP_WAKE",
         ]
 
         fields += [
@@ -1903,6 +1904,16 @@ def main():
                 curio_hold_until = 0.0
                 HORMONE_SLEEP_THRESHOLD = 0.15
                 HORMONE_SLEEP_SECONDS = 20.0
+                # RL_SLEEP_CURIO_CYCLE_V1
+                recovery_hormone = 0.0
+                auto_curio = False
+                auto_curio_since = None
+
+                SLEEP_WAKE_THRESHOLD = 0.50
+                SLEEP_RECHARGE_RATE = 0.020
+
+                CURIO_DRAIN_RATE = 0.012
+                CURIO_MIN_SECONDS = 28.0
 
                 while True:
 
@@ -2206,15 +2217,26 @@ def main():
                         and stable in ACTIVE_EMOTIONS
                     )
 
+                    # RL_SLEEP_CURIO_CYCLE_V1
+                    cycle_dt = min(max(dt, 0.0), 0.2)
+
                     if valid_hand:
+                        # Hand gesture overrides automatic behavior.
                         sleeping = False
+                        auto_curio = False
+                        auto_curio_since = None
+                        recovery_hormone = 0.0
                         low_hormone_since = None
                         curio_hold_until = 0.0
                         expression = stable
 
                     elif voice_active:
-                        # Preserve existing microphone path.
-                        # Legacy ANGRY is not sent to ESP32.
+                        # Preserve existing voice behavior.
+                        sleeping = False
+                        auto_curio = False
+                        auto_curio_since = None
+                        recovery_hormone = 0.0
+                        low_hormone_since = None
                         expression = (
                             decision.emotion
                             if decision.emotion in ACTIVE_EMOTIONS
@@ -2225,19 +2247,60 @@ def main():
                     else:
                         active_hormone_peak = max(
                             (
-                                float(
-                                    decision.hormone.get(e, 0.0)
-                                )
-                                for e in (
-                                    "HAPPY",
-                                    "SURPRISED",
-                                    "SAD"
-                                )
+                                float(decision.hormone.get(e, 0.0))
+                                for e in ("HAPPY", "SURPRISED", "SAD")
                             ),
                             default=0.0
                         )
 
-                        if (
+                        if sleeping:
+                            # Hormone regenerates during sleep.
+                            recovery_hormone = min(
+                                SLEEP_WAKE_THRESHOLD,
+                                recovery_hormone
+                                + SLEEP_RECHARGE_RATE * cycle_dt
+                            )
+
+                            if recovery_hormone >= SLEEP_WAKE_THRESHOLD:
+                                sleeping = False
+                                auto_curio = True
+                                auto_curio_since = now
+                                curio_hold_until = (
+                                    now + CURIO_MIN_SECONDS
+                                )
+                                low_hormone_since = None
+                                print(
+                                    "[AUTO] SLEEP -> CURIO "
+                                    "(H >= 0.50)"
+                                )
+
+                        elif auto_curio:
+                            # Exploring gradually consumes hormone.
+                            recovery_hormone = max(
+                                0.0,
+                                recovery_hormone
+                                - CURIO_DRAIN_RATE * cycle_dt
+                            )
+
+                            if (
+                                auto_curio_since is not None
+                                and now - auto_curio_since
+                                >= CURIO_MIN_SECONDS
+                                and recovery_hormone
+                                <= HORMONE_SLEEP_THRESHOLD
+                            ):
+                                sleeping = True
+                                auto_curio = False
+                                auto_curio_since = None
+                                recovery_hormone = 0.0
+                                low_hormone_since = None
+                                curio_hold_until = 0.0
+                                print(
+                                    "[AUTO] CURIO -> SLEEP "
+                                    "(H <= 0.15)"
+                                )
+
+                        elif (
                             not hand_seen
                             and active_hormone_peak
                             <= HORMONE_SLEEP_THRESHOLD
@@ -2250,6 +2313,11 @@ def main():
                                 >= HORMONE_SLEEP_SECONDS
                             ):
                                 sleeping = True
+                                recovery_hormone = 0.0
+                                low_hormone_since = None
+                                curio_hold_until = 0.0
+                                print("[AUTO] IDLE -> SLEEP")
+
                         else:
                             low_hormone_since = None
 
@@ -2257,6 +2325,11 @@ def main():
                             mode = "SLEEP"
                             expression = "SLEEPY"
                             curio_hold_until = 0.0
+
+                        elif auto_curio:
+                            mode = "CURIO"
+                            expression = "CURIO"
+                            last_look = "SCAN"
 
                         elif hand_seen:
                             expression = "IDLE"
@@ -2268,14 +2341,12 @@ def main():
                         ):
                             if now >= curio_hold_until:
                                 curio_hold_until = now + 12.0
-
                             mode = "CURIO"
                             expression = "CURIO"
                             last_look = "SCAN"
 
                         else:
                             expression = "IDLE"
-
                     # Continue selected emotion while its
                     # hormone remains above Brain threshold.
                     if (
@@ -2283,6 +2354,7 @@ def main():
                         and not voice_active
                         and decision.emotion in EMOTIONS
                         and not sleeping
+                        and not auto_curio
                     ):
                         expression = decision.emotion
                         mode = "HORMONE"
@@ -2422,6 +2494,7 @@ def main():
                         })
 
                         row["H_MOTOR"] = f"{motor_drive:.4f}"
+                        row["H_SLEEP_WAKE"] = f"{recovery_hormone:.4f}"
                         row["MOTOR_SPEED_RAW"] = motor_speed_raw
                         row["STIMULUS_MAX"] = (
                             f"{stimulus_max:.4f}"
@@ -2494,9 +2567,19 @@ def main():
                     # Use existing Brain and autonomous variables.
                     # No changes to motion or recognition logic.
 
+                    display_hormone = (
+                        recovery_hormone
+                        if sleeping or auto_curio
+                        else motor_drive
+                    )
+
                     if sleeping:
-                        sleep_status = "ON (AUTO)"
-                        sleep_timer = "LOW HORMONE TIME REACHED"
+                        sleep_status = "CHARGING (AUTO)"
+                        sleep_timer = "WAKE AT H=0.50"
+
+                    elif auto_curio:
+                        sleep_status = "AWAKE (CURIO)"
+                        sleep_timer = "NO INPUT -> RETURN TO SLEEP"
 
                     elif expression == "SLEEPY":
                         sleep_status = "ON (GESTURE)"
@@ -2551,7 +2634,7 @@ def main():
                             f"| FPS: {fps:.1f}"
                         ),
                         (
-                            f"HORMONE: {motor_drive:.2f} / 1.00"
+                            f"HORMONE: {display_hormone:.2f} / 1.00"
                         ),
                         (
                             f"CURIOSITY: {behavior.curiosity:.2f} "
