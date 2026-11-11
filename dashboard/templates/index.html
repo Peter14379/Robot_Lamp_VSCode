@@ -1113,10 +1113,10 @@ body.sim .real-only {
       <canvas id="rl-graph-servo"></canvas>
     </div>
     <div class="rl-test-wide">
-      <h3>Emotion / Behavior Activity (0-1)</h3>
+      <h3>Emotion / Behavior Smooth Activity (0-1)</h3>
       <p class="rl-note">
         6 states from live camera / behavior;
-        1 = active, 0 = inactive
+        Smoothed activity from detected states
       </p>
       <canvas id="rl-graph-emotion-all"></canvas>
     </div>
@@ -4002,6 +4002,12 @@ rlInitEmotionSpeedEditor();
         "#b4c3d0", "#76e7c4", "#ffd66b",
         "#69aaff", "#ff994d", "#ca91ff"
     ];
+    // RL_SMOOTH_EMOTION_GRAPH_V1
+    // Visualization only. Does not control CPG or Servo.
+    const activityLevels = Object.fromEntries(
+        allStates.map(name => [name, 0])
+    );
+
     const servos = ["S1", "S2", "S3", "S4"];
 
     const colors = [
@@ -4035,7 +4041,8 @@ rlInitEmotionSpeedEditor();
         const H = canvas.height = 215;
 
         const left = 48;
-        const right = 15;
+        const right =
+            id === "rl-graph-emotion-all" ? 185 : 15;
         const top = 16;
         const bottom = 30;
 
@@ -4145,9 +4152,7 @@ rlInitEmotionSpeedEditor();
             allStates.map((name, i) => ({
                 name,
                 color: stateColors[i],
-                get: row => row.cameraLive
-                    ? (row.emotion === name ? 1 : 0)
-                    : null
+                get: row => row.activity?.[name] ?? null
             })),
             0, 1
         );
@@ -4342,6 +4347,32 @@ rlInitEmotionSpeedEditor();
                         ? number(servo.actual)
                         : null;
                 }
+            }
+
+            // Smooth all six visual activity signals.
+            row.activity = {};
+
+            for (const name of allStates) {
+                if (!row.cameraLive) {
+                    activityLevels[name] = 0;
+                    row.activity[name] = null;
+                    continue;
+                }
+
+                const target =
+                    row.emotion === name ? 1 : 0;
+
+                // Rise gradually; decay gradually.
+                const rate = target ? 0.48 : 0.50;
+
+                activityLevels[name] +=
+                    (target - activityLevels[name]) * rate;
+
+                if (activityLevels[name] < 0.015) {
+                    activityLevels[name] = 0;
+                }
+
+                row.activity[name] = activityLevels[name];
             }
 
             last = row;

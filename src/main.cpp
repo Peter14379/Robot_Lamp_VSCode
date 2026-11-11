@@ -1303,11 +1303,12 @@ void setEmotion(String e) {
                 wakePhase = WAKE_WAIT_SLEEP;
             }
 
-            // Keep the first real wake gesture.
-            // An IDLE update must not erase it.
+            // RL_WAKE_LATEST_V2
+            // Keep the newest non-IDLE gesture.
+            // IDLE must not erase a real request.
             if (
-                wakePending.isEmpty() ||
-                wakePending == "IDLE"
+                e != "IDLE" ||
+                wakePending.isEmpty()
             ) {
                 wakePending = e;
             }
@@ -1332,7 +1333,7 @@ void setEmotion(String e) {
     }
 
 
-    // Ignore repeated emotion while moving.
+    // Finish current motion before accepting a new one.
     if (motionActive) {
         if (e == emotion) {
             Serial.printf(
@@ -1349,7 +1350,6 @@ void setEmotion(String e) {
         }
         return;
     }
-
     if (e == "IDLE") {
         frames = idleFrames;
         frameCount =
@@ -1838,6 +1838,7 @@ void updateWakeTransition() {
 
     if (wakePhase == WAKE_WAIT_SLEEP) {
 
+        // Wait for the full SLEEPY motion first.
         if (motionActive) {
             return;
         }

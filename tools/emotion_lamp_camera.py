@@ -1340,8 +1340,8 @@ class EmotionTransport:
 
 class FilteredEmotionTransport(EmotionTransport):
 
-    STABLE_SECONDS = 0.8
-    MIN_GAP_SECONDS = 3.0
+    STABLE_SECONDS = 0.6
+    MIN_GAP_SECONDS = 0.8
     SETTLE_SECONDS = 2.0
     FALLBACK_MOTION_SECONDS = 8.0
 
@@ -1355,6 +1355,11 @@ class FilteredEmotionTransport(EmotionTransport):
         self._filter_last = None
         self._filter_last_at = 0.0
         self._filter_next_at = 0.0
+
+        # RL_CAMERA_FINISH_QUEUE_V1
+        self._pending_emotion = None
+        self._status_checked_at = 0.0
+        self._status_active = None
 
     # ======================================
     # READ SAVED MOTION DURATION
@@ -1426,22 +1431,49 @@ class FilteredEmotionTransport(EmotionTransport):
     # FILTER OUTGOING COMMANDS
     # ======================================
 
-    def send(self, emotion, source):
+    # RL_CAMERA_FINISH_QUEUE_V1
+    def _cpg_active(self):
+        # Use actual CPG status, not estimated motion time.
+        if self.mode != "http":
+            return False
 
-        # Preview does not command the motors.
+        now = time.monotonic()
+
+        if now - self._status_checked_at < 0.5:
+            return self._status_active
+
+        self._status_checked_at = now
+        self._status_active = None
+
+        try:
+            with urllib.request.urlopen(
+                self.server + "/api/emotion/cpg-status",
+                timeout=1.5
+            ) as response:
+                result = json.load(response)
+
+            if not result.get("ok"):
+                return None
+
+            status = str(result.get("status", ""))
+            token = status.split("ACTIVE=", 1)[1].split()[0]
+
+            if token not in ("0", "1"):
+                return None
+
+            self._status_active = token == "1"
+            return self._status_active
+
+        except (OSError, ValueError, KeyError, IndexError):
+            return None
+
+    def send(self, emotion, source):
         if self.mode == "preview":
-            return super().send(
-                emotion,
-                source
-            )
+            return super().send(emotion, source)
 
         allowed = (
-            "IDLE",
-            "CURIO",
-            "HAPPY",
-            "SURPRISED",
-            "SAD",
-            "SLEEPY"
+            "IDLE", "CURIO", "HAPPY",
+            "SURPRISED", "SAD", "SLEEPY"
         )
 
         if emotion not in allowed:
@@ -1449,64 +1481,74 @@ class FilteredEmotionTransport(EmotionTransport):
 
         now = time.monotonic()
 
-        # Step 1: emotion must be stable.
+        # Step 1: Require stable camera detection.
         if emotion != self._filter_candidate:
-
             self._filter_candidate = emotion
             self._filter_since = now
-
             return False
 
-        if (
-            now - self._filter_since
-            < self.STABLE_SECONDS
-        ):
+        if now - self._filter_since < self.STABLE_SECONDS:
             return False
 
-        # Step 2: wait until the previous
-        # motion's estimated duration ends.
+        # Step 2: Keep one pending emotion.
+        # New non-IDLE emotions replace older requests.
+        # Brief IDLE does not erase a pending gesture.
+        if emotion != self._filter_last:
+            if emotion != "IDLE" or self._pending_emotion is None:
+                if self._pending_emotion != emotion:
+                    print("[QUEUE] pending:", emotion)
+
+                self._pending_emotion = emotion
+
         if now < self._filter_next_at:
             return False
 
-        # Step 3: suppress duplicate emotions.
-        if emotion == self._filter_last:
+        # Step 3: Check whether CPG has finished.
+        busy = self._cpg_active()
 
+        if busy is None:
+            # Do not send when CPG status is unavailable.
+            return False
+
+        if busy:
+            return False
+
+        # Step 4: Execute latest queued emotion.
+        next_emotion = self._pending_emotion or emotion
+
+        if next_emotion == self._filter_last:
             if (
-                emotion != "CURIO"
-                or now - self._filter_last_at < 18.0
+                next_emotion != "CURIO" or
+                now - self._filter_last_at < 18.0
             ):
+                self._pending_emotion = None
                 return True
 
-        # Step 4: use the existing transport.
-        success = super().send(
-            emotion,
-            source
-        )
+        success = super().send(next_emotion, source)
 
         if not success:
             return False
 
-        # Step 5: lock based on saved Hold ms.
-        self._filter_last = emotion
+        self._pending_emotion = None
+        self._filter_last = next_emotion
         self._filter_last_at = time.monotonic()
 
-        duration = self._expected_seconds(
-            emotion
-        )
+        # HTTP waits for real CPG completion.
+        # Serial-only mode keeps an estimated fallback.
+        if self.mode == "http":
+            hold = self.MIN_GAP_SECONDS
+        else:
+            hold = max(
+                self.MIN_GAP_SECONDS,
+                self._expected_seconds(next_emotion)
+                + self.SETTLE_SECONDS
+            )
 
-        lock_for = max(
-            self.MIN_GAP_SECONDS,
-            duration + self.SETTLE_SECONDS
-        )
-
-        self._filter_next_at = (
-            self._filter_last_at
-            + lock_for
-        )
+        self._filter_next_at = self._filter_last_at + hold
 
         print(
-            f"[FILTER] {emotion} accepted; "
-            f"pause {lock_for:.1f}s"
+            f"[FILTER] {next_emotion} sent; "
+            f"gap {hold:.1f}s"
         )
 
         return True
