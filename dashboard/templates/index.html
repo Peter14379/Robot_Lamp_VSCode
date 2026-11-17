@@ -457,11 +457,13 @@ body.sim .real-only {
 </div>
 
 <div class="notice">
-    REAL: เปลี่ยน Target ticks และ Velocity RAW 40–200
+    REAL: เปลี่ยน Target ticks และ Velocity RAW 40–800
     ได้จาก Dashboard โดยตรง
     • MOVE สูงสุด 300 ticks ต่อครั้ง
     • SETZERO บันทึกตำแหน่งแต่ไม่ขยับ
-    • ARM HOME ต้องอยู่ใกล้ Home ที่บันทึกไว้ก่อน
+    • REAL IK ต้องสอบเทียบ geometry/zero ก่อน
+    • Cartesian waypoints เคลื่อน Servo ทีละตัว
+      และไม่มี collision detection
     • CANCEL ไม่ใช่ Emergency Stop
 </div>
 
@@ -487,6 +489,14 @@ body.sim .real-only {
                 <small>Z (mm)</small>
                 <strong id="actual-z">—</strong>
             </div>
+        </div>
+
+        <div class="metric" style="margin-top:10px">
+            <small>Position singularity index (0–1)</small>
+            <strong id="singularity-value">—</strong>
+            <span id="singularity-status" class="muted">
+                Waiting for calibrated joint feedback
+            </span>
         </div>
 
         <p class="muted" id="position-source">
@@ -605,9 +615,8 @@ body.sim .real-only {
             <h2>Inverse Kinematics — X / Y / Z</h2>
 
             <p class="muted">
-                IK ทำงานใน Simulation เท่านั้น
-                จนกว่าจะวัดความยาวแขน สอบเทียบ Frame
-                และทดสอบการชน
+                REAL IK ใช้ได้หลังวัด geometry และสอบเทียบ Frame/ข้อต่อแล้ว
+                ไม่มีระบบตรวจการชน ต้องตรวจพื้นที่การเคลื่อนที่เองก่อนใช้จริง
             </p>
 
             <div class="fields">
@@ -632,7 +641,7 @@ body.sim .real-only {
                 </label>
 
                 <label class="field">
-                    <span>Velocity (mm/s, SIM)</span>
+                    <span>TCP Speed (mm/s)</span>
                     <input
                         type="number"
                         id="ik-speed"
@@ -657,6 +666,31 @@ body.sim .real-only {
                 </label>
             </div>
 
+            <p class="muted">
+                REAL uses the per-servo RAW settings. The TCP speed is a requested
+                path speed; actual speed depends on servo calibration.
+            </p>
+
+            <div class="card" style="margin-top:14px">
+                <h3>Jog TCP</h3>
+                <label class="field" style="max-width:220px">
+                    <span>Jog step (mm)</span>
+                    <input type="number" id="jog-step" value="5" min="1" max="20">
+                </label>
+                <div class="actions">
+                    <button type="button" data-jog-axis="x" data-jog-sign="-1">X −</button>
+                    <button type="button" data-jog-axis="x" data-jog-sign="1">X +</button>
+                    <button type="button" data-jog-axis="y" data-jog-sign="-1">Y −</button>
+                    <button type="button" data-jog-axis="y" data-jog-sign="1">Y +</button>
+                    <button type="button" data-jog-axis="z" data-jog-sign="-1">Z −</button>
+                    <button type="button" data-jog-axis="z" data-jog-sign="1">Z +</button>
+                </div>
+                <p class="muted">
+                    REAL jog is incremental and moves joints sequentially;
+                    it is not an emergency stop or collision planner.
+                </p>
+            </div>
+
             <div class="actions">
                 <button id="ik-preview">
                     Preview IK
@@ -664,6 +698,10 @@ body.sim .real-only {
 
                 <button id="ik-move" class="primary sim-only">
                     MOVE TO XYZ (SIM)
+                </button>
+
+                <button id="ik-move-real" class="primary real-only">
+                    MOVE TO XYZ (REAL)
                 </button>
 
                 <button id="ik-home" class="sim-only">
@@ -679,10 +717,12 @@ body.sim .real-only {
             <h2>Geometry / Software Zero</h2>
 
             <p class="notice">
-                H / L1 / L2 / L3 เป็นค่าตัวอย่าง
-                ไม่ใช่แขนจริง
-                • SETZERO ไม่ขยับมอเตอร์
-                • ไม่ต้องตั้ง Zero ใหม่หากเคยบันทึกแล้ว
+                โมเดลเริ่มต้นจากระยะที่วัดได้:
+                H=70 mm (ฐานถึง Servo 2), L1=70 mm,
+                L2=90 mm, L3=0 mm (TCP อยู่ที่แกน Servo 4).
+                ท่าอ้างอิงเริ่มต้นคือแขนตั้งตรง
+                (J1=0°, J2=90°, J3=0°, J4=0°).
+                ตรวจทิศแกนและสอบเทียบก่อนเปิด REAL IK
             </p>
 
             <div class="fields">
@@ -719,7 +759,9 @@ body.sim .real-only {
                 
 <p class="muted">
     REAL FK ใช้โมเดลแขน 4 ข้อ:
-    ต้องวัดลิงก์และมุม Home จริงก่อน
+    วางแขนด้วยมือที่ท่า Home ตามค่า Home angle
+    ก่อนกด Capture; SETZERO บันทึก ticks ปัจจุบัน
+    และไม่ขยับมอเตอร์
 </p>
 
 <div
@@ -748,8 +790,12 @@ body.sim .real-only {
                     SAVE GEOMETRY
                 </button>
 
+                <button id="reset-measured-geometry">
+                    RESET TO MEASURED LINKS
+                </button>
+
                 <button id="zero-all">
-                    SETZERO ALL (NO MOVE)
+                    CAPTURE CURRENT POSE AS ZERO
                 </button>
             </div>
 
@@ -949,7 +995,7 @@ body.sim .real-only {
         <h2>Velocity / Diagnostics</h2>
 
         <p class="muted">
-            REAL: Velocity RAW 40–200
+            REAL: Velocity RAW 40–800
             ปรับ Servo 1–4 แยกกันได้จาก Dashboard
             และใช้กับ MOVE/Emotion
             • SIM: Velocity หน่วย °/s เป็นคนละค่า
@@ -1197,12 +1243,12 @@ const sleep = ms =>
 
 const DEFAULT = {
     h: 70,
-    l1: 110,
-    l2: 105,
-    l3: 65,
+    l1: 70,
+    l2: 90,
+    l3: 0,
     dirs: [1, 1, 1, 1],
 
-    homeAngles: [0, 0, 0, 0],
+    homeAngles: [0, 90, 0, 0],
 
     ticksPerDegree: [
         1023/300,
@@ -1235,6 +1281,7 @@ let live = {
 
 let working = false;
 let simCancelled = false;
+let realSequenceCancelled = false;
 
 // =====================================
 // GENERAL
@@ -1298,6 +1345,39 @@ function fk(q) {
     };
 }
 
+function singularityIndex(q) {
+    if (!q || q.length !== 4) return null;
+
+    const step = 0.1;
+    const base = fk(q);
+    const columns = [];
+
+    for (let joint = 0; joint < 3; joint++) {
+        const next = [...q];
+        next[joint] += step;
+        const p = fk(next);
+        const scale = 1 / (step * DEG);
+
+        columns.push([
+            (p.x - base.x) * scale,
+            (p.y - base.y) * scale,
+            (p.z - base.z) * scale
+        ]);
+    }
+
+    const [a, b, c] = columns;
+    const det =
+        a[0] * (b[1] * c[2] - b[2] * c[1]) -
+        b[0] * (a[1] * c[2] - a[2] * c[1]) +
+        c[0] * (a[1] * b[2] - a[2] * b[1]);
+    const reach = Math.max(
+        1,
+        geom.l1 + geom.l2 + geom.l3
+    );
+
+    return clamp(Math.abs(det) / (reach ** 3), 0, 1);
+}
+
 function checkQ(q) {
     if (
         q.length !== 4 ||
@@ -1322,7 +1402,7 @@ function checkQ(q) {
 // INVERSE KINEMATICS
 // =====================================
 
-function ik(p, pitch, elbow) {
+function ik(p, pitch, elbow, enforceDemoLimits = true) {
     const a = Math.atan2(p.y, p.x);
     const r = Math.hypot(p.x, p.y);
     const t = pitch * DEG;
@@ -1371,7 +1451,12 @@ function ik(p, pitch, elbow) {
         (t - b - c) / DEG
     ];
 
-    checkQ(q);
+    if (enforceDemoLimits) {
+        checkQ(q);
+    } else if (q.some(x => !Number.isFinite(x))) {
+        throw Error("Invalid joint solution");
+    }
+
     return q;
 }
 
@@ -1677,6 +1762,31 @@ function buttons() {
     $("ik-move").disabled =
         working || mode !== "sim";
 
+    const realIkReady = (
+        ready &&
+        geom.realCalibrated &&
+        !live.emotion_armed &&
+        IDS.every(id => {
+            const s = servo(id);
+            return (
+                s &&
+                s.online &&
+                Number.isInteger(s.actual) &&
+                Number.isInteger(s.zero) &&
+                Number.isInteger(s.min) &&
+                Number.isInteger(s.max)
+            );
+        })
+    );
+
+    $("ik-move-real").disabled = !realIkReady;
+
+    document.querySelectorAll("[data-jog-axis]").forEach(button => {
+        button.disabled = mode === "sim"
+            ? working
+            : !realIkReady;
+    });
+
     $("zero-all").disabled =
         working ||
         live.busy ||
@@ -1723,9 +1833,22 @@ function render() {
             p ? fmt(p[k]) : "—";
     }
 
+    const index = p ? singularityIndex(q) : null;
+    $("singularity-value").textContent =
+        index === null ? "—" : fmt(index, 4);
+    $("singularity-status").textContent =
+        index === null
+            ? "Calibrate geometry and joint zero to enable REAL index"
+            : index < 0.02
+                ? "NEAR SINGULAR — Cartesian motion blocked"
+                : "OK — normalized manipulability estimate";
+    $("singularity-status").className =
+        "muted " +
+        (index !== null && index < 0.02 ? "error" : "ok");
+
     $("position-source").textContent =
         mode === "sim"
-            ? "SIMULATION • calculated from demo model"
+            ? "SIMULATION • calculated from configured kinematic model"
             : geom.realCalibrated
                 ? "REAL • FK estimate from calibrated model (not sensor-measured XYZ)"
                 : "REAL • set actual geometry and Home angles in Setup/Zero";
@@ -1893,6 +2016,15 @@ function changeMode(next) {
         IDS.forEach(id => {
             $("target-" + id).dataset.seeded = "";
         });
+
+        const q = realQ();
+        if (q) {
+            const p = fk(q);
+            $("ik-x").value = fmt(p.x);
+            $("ik-y").value = fmt(p.y);
+            $("ik-z").value = fmt(p.z);
+            $("ik-pitch").value = fmt(p.pitch);
+        }
     }
 
     render();
@@ -2180,6 +2312,8 @@ async function goZeroAllReal() {
 }
 
 async function cancelReal() {
+    realSequenceCancelled = true;
+
     try {
         const d = await post("/api/cancel");
         log(d.message);
@@ -2543,7 +2677,8 @@ function getIK() {
         q: ik(
             p,
             pitch,
-            $("ik-elbow").value
+            $("ik-elbow").value,
+            mode === "sim"
         )
     };
 }
@@ -2551,13 +2686,29 @@ function getIK() {
 function previewIK() {
     try {
         const t = getIK();
+        const index = singularityIndex(t.q);
+        const canPreviewTicks = (
+            mode === "real" &&
+            geom.realCalibrated &&
+            IDS.every(id => Number.isInteger(servo(id)?.zero))
+        );
+        const targets = canPreviewTicks
+            ? realTicksForQ(t.q)
+            : null;
 
         message(
             "ik-result",
             t.q.map(
                 (v, i) =>
                     `J${i+1}=${fmt(v)}°`
-            ).join(" | ")
+            ).join(" | ") +
+            (targets
+                ? ` | ticks=${targets.map(x => x.target).join(",")}`
+                : mode === "real"
+                    ? " | ticks require calibration"
+                    : "") +
+            ` | Singularity index=${fmt(index, 4)}`,
+            index < 0.02
         );
 
     } catch (e) {
@@ -2663,6 +2814,289 @@ async function moveIK() {
     } finally {
         setWorking(false);
         render();
+    }
+}
+
+function realTicksForQ(q, previousTicks = null) {
+    if (!geom.realCalibrated) {
+        throw Error(
+            "Save measured geometry and calibration before REAL IK"
+        );
+    }
+
+    return IDS.map((id, i) => {
+        const s = servo(id);
+        const speed = number("real-speed-" + id);
+
+        if (
+            !s ||
+            !s.online ||
+            !Number.isInteger(s.actual) ||
+            !Number.isInteger(s.zero) ||
+            !Number.isInteger(s.min) ||
+            !Number.isInteger(s.max)
+        ) {
+            throw Error(`Servo ${id}: feedback/zero unavailable`);
+        }
+
+        if (
+            !Number.isInteger(speed) ||
+            speed < 40 ||
+            speed > 800
+        ) {
+            throw Error(`Servo ${id}: speed must be 40..800 RAW`);
+        }
+
+        const target = Math.round(
+            s.zero +
+            (q[i] - geom.homeAngles[i]) *
+            geom.ticksPerDegree[i] /
+            geom.dirs[i]
+        );
+        const previous = previousTicks
+            ? previousTicks[i]
+            : s.actual;
+
+        if (
+            target < s.min + 20 ||
+            target > s.max - 20
+        ) {
+            throw Error(
+                `Servo ${id}: IK target ${target} outside safe range ` +
+                `${s.min + 20}..${s.max - 20}`
+            );
+        }
+
+        if (Math.abs(target - previous) > 300) {
+            throw Error(
+                `Servo ${id}: IK step exceeds 300 ticks; use smaller jog steps`
+            );
+        }
+
+        return { id, target, speed };
+    });
+}
+
+function planRealIK(goal) {
+    if (
+        !live.connected ||
+        !live.info_ready ||
+        live.busy ||
+        live.emotion_armed
+    ) {
+        throw Error(
+            "REAL IK requires connected, fresh, disarmed servos"
+        );
+    }
+
+    const startQ = realQ();
+    if (!startQ) {
+        throw Error(
+            "Set each servo software zero before REAL IK"
+        );
+    }
+
+    const start = fk(startQ);
+    const distance = Math.hypot(
+        goal.p.x - start.x,
+        goal.p.y - start.y,
+        goal.p.z - start.z
+    );
+    const maxSegmentMm = clamp(goal.velocity * 0.25, 2, 8);
+    const count = Math.max(1, Math.ceil(distance / maxSegmentMm));
+
+    if (count > 100) {
+        throw Error("Cartesian path is too long for one command");
+    }
+
+    const path = [];
+    let previousTicks = IDS.map(id => servo(id).actual);
+    let previousQ = [...startQ];
+
+    for (let index = 1; index <= count; index++) {
+        const t = index / count;
+        const p = {
+            x: start.x + (goal.p.x - start.x) * t,
+            y: start.y + (goal.p.y - start.y) * t,
+            z: start.z + (goal.p.z - start.z) * t
+        };
+        const pitch =
+            start.pitch + (goal.pitch - start.pitch) * t;
+        const q = ik(
+            p,
+            pitch,
+            $("ik-elbow").value,
+            false
+        );
+        const indexValue = singularityIndex(q);
+
+        if (indexValue < 0.02) {
+            throw Error(
+                `Path approaches a singularity (index ${fmt(indexValue, 4)})`
+            );
+        }
+
+        const targets = realTicksForQ(q, previousTicks);
+        const sequentialQ = [...previousQ];
+        for (let joint = 0; joint < IDS.length; joint++) {
+            sequentialQ[joint] = q[joint];
+            if (singularityIndex(sequentialQ) < 0.02) {
+                throw Error(
+                    `Sequential move approaches a singularity at Servo ${joint + 1}`
+                );
+            }
+        }
+
+        path.push({ targets, q });
+        previousTicks = targets.map(item => item.target);
+        previousQ = [...q];
+    }
+
+    return path;
+}
+
+async function moveIKReal() {
+    if (mode !== "real" || working) return;
+
+    try {
+        if (!geom.realCalibrated) {
+            throw Error(
+                "Calibrate geometry, joint directions, and zero first"
+            );
+        }
+
+        await refresh();
+        const goal = getIK();
+        const path = planRealIK(goal);
+        const startPosition = fk(realQ());
+
+        if (!window.confirm(
+            `Move through ${path.length} Cartesian waypoints? ` +
+            "Joints move sequentially; no collision detection is available. " +
+            "Clear the workspace and keep the hardware stop accessible."
+        )) {
+            return;
+        }
+
+        realSequenceCancelled = false;
+        setWorking(true);
+
+        let completed = 0;
+        const lastCommands = IDS.map(id => servo(id).actual);
+        const segmentTimeMs =
+            path.length > 0
+                ? (Math.hypot(
+                    goal.p.x - startPosition.x,
+                    goal.p.y - startPosition.y,
+                    goal.p.z - startPosition.z
+                ) / path.length / goal.velocity) * 1000
+                : 0;
+
+        for (const waypoint of path) {
+            const segmentStarted = performance.now();
+
+            for (const item of waypoint.targets) {
+                if (realSequenceCancelled) {
+                    throw Error("Sequence cancelled");
+                }
+
+                if (
+                    Math.abs(
+                        item.target -
+                        lastCommands[item.id - 1]
+                    ) <= 1
+                ) {
+                    continue;
+                }
+
+                await post(
+                    `/api/servo/${item.id}/move`,
+                    {
+                        target: item.target,
+                        speed: item.speed
+                    }
+                );
+                lastCommands[item.id - 1] = item.target;
+            }
+
+            const remainingMs =
+                segmentTimeMs -
+                (performance.now() - segmentStarted);
+            if (remainingMs > 0) {
+                await sleep(remainingMs);
+            }
+
+            completed++;
+            await refresh();
+            message(
+                "ik-result",
+                `REAL IK waypoint ${completed}/${path.length}`
+            );
+        }
+
+        await refresh();
+        message(
+            "ik-result",
+            `REAL IK completed: ${completed} waypoints`
+        );
+
+    } catch (e) {
+        const reason =
+            e instanceof Error ? e.message : String(e);
+        message(
+            "ik-result",
+            `REAL IK stopped: ${reason}`,
+            true
+        );
+
+        try {
+            await refresh();
+        } catch (refreshError) {
+            const refreshReason =
+                refreshError instanceof Error
+                    ? refreshError.message
+                    : String(refreshError);
+            message(
+                "ik-result",
+                `REAL IK stopped: ${reason}; status refresh failed: ${refreshReason}`,
+                true
+            );
+        }
+
+    } finally {
+        setWorking(false);
+        render();
+    }
+}
+
+async function jogTcp(axis, sign) {
+    try {
+        const step = number("jog-step");
+        if (!Number.isFinite(step) || step < 1 || step > 20) {
+            throw Error("Jog step must be 1..20 mm");
+        }
+
+        const q = mode === "sim" ? [...simQ] : realQ();
+        if (!q) {
+            throw Error("REAL joint feedback/zero unavailable");
+        }
+
+        const p = fk(q);
+        p[axis] += step * sign;
+
+        $("ik-x").value = fmt(p.x);
+        $("ik-y").value = fmt(p.y);
+        $("ik-z").value = fmt(p.z);
+        $("ik-pitch").value = fmt(p.pitch);
+
+        if (mode === "sim") {
+            await moveIK();
+        } else {
+            await moveIKReal();
+        }
+
+    } catch (e) {
+        message("ik-result", e.message, true);
     }
 }
 
@@ -3094,12 +3528,20 @@ function init() {
     // IK.
     $("ik-preview").onclick = previewIK;
     $("ik-move").onclick = moveIK;
+    $("ik-move-real").onclick = moveIKReal;
 
     $("ik-home").onclick =
         () => moveSim(
             IDS,
             [...simZero]
         );
+
+    document.querySelectorAll("[data-jog-axis]").forEach(button => {
+        button.onclick = () => jogTcp(
+            button.dataset.jogAxis,
+            Number(button.dataset.jogSign)
+        );
+    });
 
     // CANCEL.
     $("sim-cancel").onclick = () => {
@@ -3113,6 +3555,24 @@ function init() {
     // SETUP.
     $("save-geometry").onclick =
         saveGeometry;
+
+    $("reset-measured-geometry").onclick = () => {
+        $("g-h").value = DEFAULT.h;
+        $("g-l1").value = DEFAULT.l1;
+        $("g-l2").value = DEFAULT.l2;
+        $("g-l3").value = DEFAULT.l3;
+
+        IDS.forEach((id, i) => {
+            $("dir-" + id).value = DEFAULT.dirs[i];
+            $("home-angle-" + id).value =
+                DEFAULT.homeAngles[i];
+            $("ticks-deg-" + id).value =
+                DEFAULT.ticksPerDegree[i];
+        });
+
+        $("calibrated-check").checked = false;
+        saveGeometry();
+    };
 
     $("zero-all").onclick =
         () => setZero(IDS);

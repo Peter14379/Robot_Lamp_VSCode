@@ -1,4 +1,10 @@
-# Robot Lamp V1.0 — VS Code + PlatformIO (ESP32)
+# กลุ่ม 5 — Robot Lamp V1.0 (VS Code + PlatformIO / ESP32)
+
+## สมาชิกกลุ่ม
+
+- **6752500070** — ปีเตอร์ ประสิทธิพร
+- **6752500088** — จิรัชยา พลเยี่ยม
+- **6752500142** — ปิติลาภ วสุวัต
 
 โปรเจกต์โคมไฟแสดงอารมณ์ ใช้ ESP32-WROOM-32, Waveshare Bus Servo Adapter (A) และเซอร์โว 4 ตัว
 แนวคิดการแบ่ง Emotion → Animation/LED อ้างอิงจาก https://github.com/autonomous-ai/lampOS
@@ -74,6 +80,28 @@ py tools/emotion_lamp_camera.py
 
 ครั้งแรกต้องเชื่อมต่ออินเทอร์เน็ตเพื่อดาวน์โหลดไฟล์โมเดล MediaPipe
 ตัวตรวจจับใช้ขนาดภาพมือเป็นตัวประมาณความใกล้ ไม่ใช่เซ็นเซอร์วัดระยะจริง
+
+## Dashboard ควบคุมแขนและ TCP
+
+ติดตั้ง Flask และ pySerial แล้วเปิด Dashboard จากโฟลเดอร์โปรเจกต์:
+
+```powershell
+py -m pip install flask pyserial
+py dashboard/app.py
+```
+
+ก่อนเปิด ให้ตั้ง `PORT` ใน `dashboard/app.py` ให้ตรงกับ COM ของ ESP32
+จากนั้นเปิด `http://127.0.0.1:5000` ใช้ SIMULATION ตรวจ FK/IK และ Jog ก่อน
+โมเดลเริ่มต้นตามระยะที่วัดได้: ฐานถึง Servo 2 = 70 mm,
+Servo 2→3 = 70 mm, Servo 3→4 = 90 mm และ TCP อยู่ที่แกน Servo 4
+ปรับ geometry, Home angle, ทิศหมุน และ ticks/degree ใน Setup ให้ตรงกับหุ่น
+แล้วบันทึก SETZERO ที่ท่า Home จริงก่อนเลือกยืนยัน calibration
+
+REAL IK/Jog วาง Servo เป็น waypoint ทีละตัวตามลำดับ; ไม่มี collision planner
+และ TCP speed เป็นค่าที่ขอ ไม่ใช่ความเร็วจริงที่วัดจากปลายแขน
+ทดสอบด้วยความเร็ว RAW ต่ำและพื้นที่ว่าง พร้อมเข้าถึงการตัดไฟได้ทันที
+ปุ่ม CANCEL ไม่ใช่ Emergency Stop และการคำนวณ TCP เป็นค่าประมาณจาก geometry
+ไม่ใช่เซ็นเซอร์วัดตำแหน่งปลายแขน
 
 ## ตรวจสอบก่อนต่ออุปกรณ์
 
