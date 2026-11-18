@@ -518,6 +518,8 @@ body.sim .real-only {
                 <canvas id="top-view"></canvas>
             </div>
         </div>
+
+
     </div>
 
     <div class="card">
@@ -639,6 +641,19 @@ body.sim .real-only {
                     <span>End pitch (°)</span>
                     <input type="number" id="ik-pitch" value="0">
                 </label>
+    <label class="field">
+        <span>Automatic End Pitch</span>
+        <label style="display:flex;gap:8px;align-items:center">
+            <input
+                type="checkbox"
+                id="ik-auto-pitch"
+                style="width:auto"
+                checked
+            >
+            Auto rotate J4
+        </label>
+    </label>
+
 
                 <label class="field">
                     <span>TCP Speed (mm/s)</span>
@@ -707,6 +722,17 @@ body.sim .real-only {
                 <button id="ik-home" class="sim-only">
                     GO SETZERO (SIM)
                 </button>
+
+                <!-- RL_IK_RETURN_HOME_V1 -->
+
+                <button
+                    type="button"
+                    id="ik-home-real"
+                    class="real-only"
+                    style="border-color:#76e7c4"
+                >
+                    RETURN HOME (REAL)
+                </button>
             </div>
 
             <p class="msg muted" id="ik-result"></p>
@@ -716,34 +742,36 @@ body.sim .real-only {
 
             <h2>Geometry / Software Zero</h2>
 
+            
             <p class="notice">
-                โมเดลเริ่มต้นจากระยะที่วัดได้:
-                H=70 mm (ฐานถึง Servo 2), L1=70 mm,
-                L2=90 mm, L3=0 mm (TCP อยู่ที่แกน Servo 4).
-                ท่าอ้างอิงเริ่มต้นคือแขนตั้งตรง
-                (J1=0°, J2=90°, J3=0°, J4=0°).
-                ตรวจทิศแกนและสอบเทียบก่อนเปิด REAL IK
+                <strong>Robot Lamp - 4 DOF</strong><br>
+                J1 &rarr; J2 = 30 mm |
+                J2 &rarr; J3 = 90 mm<br>
+                J3 &rarr; J4 = 70 mm |
+                J4 &rarr; TCP = 80 mm<br>
+                Geometry is saved in this browser.
+                Verify calibration before REAL IK.
             </p>
 
             <div class="fields">
 
                 <label class="field">
-                    <span>Base H (mm)</span>
+                    <span>J1 &rarr; J2 (mm)</span>
                     <input id="g-h" type="number" min="0">
                 </label>
 
                 <label class="field">
-                    <span>Link L1 (mm)</span>
+                    <span>J2 &rarr; J3 (mm)</span>
                     <input id="g-l1" type="number" min="1">
                 </label>
 
                 <label class="field">
-                    <span>Link L2 (mm)</span>
+                    <span>J3 &rarr; J4 (mm)</span>
                     <input id="g-l2" type="number" min="1">
                 </label>
 
                 <label class="field">
-                    <span>Tool L3 (mm)</span>
+                    <span>J4 &rarr; TCP (mm)</span>
                     <input id="g-l3" type="number" min="0">
                 </label>
 
@@ -1242,10 +1270,10 @@ const sleep = ms =>
     new Promise(r => setTimeout(r, ms));
 
 const DEFAULT = {
-    h: 70,
-    l1: 70,
-    l2: 90,
-    l3: 0,
+    h: 30,
+    l1: 90,
+    l2: 70,
+    l3: 80,
     dirs: [1, 1, 1, 1],
 
     homeAngles: [0, 90, 0, 0],
@@ -1517,178 +1545,256 @@ function syncSimFields() {
 // ROBOT VISUALIZATION
 // =====================================
 
+
+// RL_ROBOT_VISUALIZATION_V2
+
+
 function draw(q) {
+
+    const names = ["J1", "J2", "J3", "J4", "TCP"];
+
     for (const id of ["side", "top-view"]) {
+
         const canvas = $(id);
+        canvas.style.height = "300px";
+
         const rect = canvas.getBoundingClientRect();
-
         const dpr = window.devicePixelRatio || 1;
-        const w = Math.max(100, rect.width);
-        const h = 210;
 
-        canvas.width = w * dpr;
-        canvas.height = h * dpr;
+        const w = Math.max(100, rect.width);
+        const h = 300;
+
+        canvas.width = Math.round(w * dpr);
+        canvas.height = Math.round(h * dpr);
 
         const ctx = canvas.getContext("2d");
-
         ctx.scale(dpr, dpr);
 
         ctx.fillStyle = "#081b2e";
         ctx.fillRect(0, 0, w, h);
 
-        ctx.strokeStyle = "#1a364f";
-        ctx.lineWidth = 1;
+        const side = id === "side";
 
-        for (let x = 0; x < w; x += 25) {
-            ctx.beginPath();
-            ctx.moveTo(x, 0);
-            ctx.lineTo(x, h);
-            ctx.stroke();
-        }
+        ctx.font = "12px Segoe UI, sans-serif";
 
-        for (let y = 0; y < h; y += 25) {
-            ctx.beginPath();
-            ctx.moveTo(0, y);
-            ctx.lineTo(w, y);
-            ctx.stroke();
-        }
-
-        if (!q) {
+        if (
+            !q ||
+            q.length !== 4 ||
+            q.some(v => !Number.isFinite(v))
+        ) {
             ctx.fillStyle = "#b5ccdd";
 
             ctx.fillText(
                 "Real XYZ not calibrated",
-                12,
-                h / 2
+                12, h / 2
             );
 
             continue;
         }
 
-        const [a, b, c, d] = q.map(
-            v => v * DEG
-        );
+        const [a, b, c, d] = q.map(v => v * DEG);
 
-        let nodes;
+        // Joint 1: Base
+        const j1 = [0, 0];
 
-        if (id === "side") {
-            const r1 =
-                geom.l1 * Math.cos(b);
+        // Joint 2: Shoulder
+        const j2 = [0, geom.h];
 
-            const z1 =
-                geom.h +
-                geom.l1 * Math.sin(b);
+        // Joint 3: Elbow
+        const j3 = [
+            geom.l1 * Math.cos(b),
+            geom.h + geom.l1 * Math.sin(b)
+        ];
 
-            const r2 =
-                r1 +
-                geom.l2 * Math.cos(b + c);
+        // Joint 4: Head rotation axis
+        const j4 = [
+            j3[0] + geom.l2 * Math.cos(b+c),
+            j3[1] + geom.l2 * Math.sin(b+c)
+        ];
 
-            const z2 =
-                z1 +
-                geom.l2 * Math.sin(b + c);
+        // Absolute head orientation
+        const pitch = b + c + d;
 
-            const r3 =
-                r2 +
-                geom.l3 * Math.cos(b + c + d);
+        // J4 rotates the complete Top Part
+        const tcp = [
+            j4[0] + geom.l3 * Math.cos(pitch),
+            j4[1] + geom.l3 * Math.sin(pitch)
+        ];
 
-            const z3 =
-                z2 +
-                geom.l3 * Math.sin(b + c + d);
+        const points = [j1, j2, j3, j4, tcp];
 
-            const S = Math.min(
-                w * .55 /
-                (
-                    geom.l1 +
-                    geom.l2 +
-                    geom.l3
-                ),
-                h * .65 /
-                (
-                    geom.h +
-                    geom.l1 +
-                    geom.l2 +
-                    geom.l3
-                )
-            );
+        // Include the complete head rotation area.
+        // This keeps the view stable when J4 moves.
+        const bounds = [
+            j1, j2, j3, j4,
+            [j4[0]-geom.l3, j4[1]-geom.l3],
+            [j4[0]+geom.l3, j4[1]+geom.l3]
+        ];
 
-            nodes = [
-                [0, geom.h],
-                [r1, z1],
-                [r2, z2],
-                [r3, z3]
-            ].map(([r, z]) => [
-                w * .2 + r * S,
-                h * .83 - z * S
-            ]);
-
-        } else {
-            const rs = [
-                0,
-
-                geom.l1 * Math.cos(b),
-
-                geom.l1 * Math.cos(b) +
-                geom.l2 * Math.cos(b + c),
-
-                geom.l1 * Math.cos(b) +
-                geom.l2 * Math.cos(b + c) +
-                geom.l3 * Math.cos(b + c + d)
+        const project = ([r,z]) => side
+            ? [r,z]
+            : [
+                r * Math.cos(a),
+                r * Math.sin(a)
             ];
 
-            const S =
-                Math.min(w, h) * .32 /
-                (
-                    geom.l1 +
-                    geom.l2 +
-                    geom.l3
-                );
+        const projected = points.map(project);
+        const projectedBounds = bounds.map(project);
 
-            nodes = rs.map(r => [
-                w / 2 +
-                r * Math.cos(a) * S,
+        const xs = projectedBounds.map(v => v[0]);
+        const ys = projectedBounds.map(v => v[1]);
 
-                h / 2 -
-                r * Math.sin(a) * S
-            ]);
+        const xmin = Math.min(...xs);
+        const xmax = Math.max(...xs);
+
+        const ymin = Math.min(...ys);
+        const ymax = Math.max(...ys);
+
+        const reach =
+            geom.h + geom.l1 + geom.l2 + geom.l3;
+
+        const S = Math.min(
+            Math.max(20,w-64) /
+                Math.max(xmax-xmin,reach*0.5),
+
+            Math.max(20,h-64) /
+                Math.max(ymax-ymin,reach*0.5)
+        );
+
+        const ox = w/2 - (xmin+xmax)/2*S;
+        const oy = h/2 + (ymin+ymax)/2*S;
+
+        const nodes = projected.map(([x,y]) => [
+            ox+x*S,
+            oy-y*S
+        ]);
+
+        // Grid: 50 mm
+        const grid = 50*S;
+
+        ctx.strokeStyle = "#203a50";
+        ctx.lineWidth = 1;
+
+        for(let x=ox%grid;x<w;x+=grid){
+            ctx.beginPath();
+            ctx.moveTo(x,0);
+            ctx.lineTo(x,h);
+            ctx.stroke();
         }
 
-        ctx.strokeStyle =
-            id === "side"
-                ? "#76e7c4"
-                : "#88baff";
+        for(let y=oy%grid;y<h;y+=grid){
+            ctx.beginPath();
+            ctx.moveTo(0,y);
+            ctx.lineTo(w,y);
+            ctx.stroke();
+        }
 
-        ctx.lineWidth = 5;
+        // Base
+        ctx.fillStyle = "#8398ad";
+
+        if(side){
+            ctx.fillRect(
+                nodes[0][0]-22,
+                nodes[0][1],
+                44,10
+            );
+        }else{
+            ctx.beginPath();
+            ctx.arc(
+                ...nodes[0],
+                15,0,Math.PI*2
+            );
+            ctx.fill();
+        }
+
+        // Draw all four links
+        const colors = [
+            "#8398ad",
+            side?"#76e7c4":"#88baff",
+            side?"#76e7c4":"#88baff",
+            "#ffd19a"
+        ];
+
         ctx.lineCap = "round";
 
-        ctx.beginPath();
+        for(let i=0;i<nodes.length-1;i++){
 
-        nodes.forEach((p, i) => {
-            if (i) {
-                ctx.lineTo(...p);
-            } else {
-                ctx.moveTo(...p);
-            }
-        });
+            ctx.strokeStyle = colors[i];
+            ctx.lineWidth = i===3?9:7;
 
-        ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(...nodes[i]);
+            ctx.lineTo(...nodes[i+1]);
+            ctx.stroke();
+        }
 
-        nodes.forEach((p, i) => {
+        // Draw joint centers
+        nodes.forEach(([x,y],i)=>{
+
             ctx.beginPath();
 
             ctx.arc(
-                ...p,
-                i === 3 ? 6 : 5,
-                0,
-                2 * Math.PI
+                x,y,
+                i===4?7:5,
+                0,Math.PI*2
             );
 
             ctx.fillStyle =
-                i === 3
-                    ? "#ffd6a5"
-                    : "#f0f6ff";
+                i===4?"#ffd19a":"#eef6ff";
 
             ctx.fill();
         });
+
+        // Joint labels - combine overlapping points
+        const groups = [];
+
+        nodes.forEach(([x,y],i)=>{
+
+            const g = groups.find(
+                v=>Math.hypot(v.x-x,v.y-y)<7
+            );
+
+            if(g){
+                g.names.push(names[i]);
+            }else{
+                groups.push({
+                    x,y,names:[names[i]]
+                });
+            }
+        });
+
+        ctx.font = "bold 12px Segoe UI, sans-serif";
+
+        groups.forEach((g,i)=>{
+
+            const label = g.names.join("/");
+            const width = ctx.measureText(label).width;
+
+            const x = clamp(
+                g.x+10,4,w-width-4
+            );
+
+            const y = clamp(
+                g.y+(i%2?18:-12),14,h-5
+            );
+
+            ctx.fillStyle = "#081b2e";
+            ctx.fillRect(x-2,y-12,width+4,15);
+
+            ctx.fillStyle = g.names.includes("TCP")
+                ? "#ffd19a"
+                : "#eef6ff";
+
+            ctx.fillText(label,x,y);
+        });
+
+        ctx.font = "11px Segoe UI, sans-serif";
+        ctx.fillStyle = "#b5ccdd";
+
+        ctx.fillText(
+            side?"R / Z (mm)":"X / Y (mm)",
+            8,14
+        );
     }
 }
 
@@ -1801,6 +1907,22 @@ function buttons() {
     $("go-zero-all").disabled =
         !ready || live.emotion_armed;
 
+    $("ik-home-real").disabled =
+        !ready ||
+        live.emotion_armed ||
+        !IDS.every(id => {
+            const s = servo(id);
+
+            return s &&
+                s.online &&
+                Number.isInteger(s.actual) &&
+                Number.isInteger(s.zero) &&
+                Number.isInteger(s.min) &&
+                Number.isInteger(s.max) &&
+                s.zero >= s.min + 20 &&
+                s.zero <= s.max - 20;
+        });
+
     $("arm-home").disabled =
         !ready ||
         !IDS.every(id =>
@@ -1908,6 +2030,7 @@ function render() {
         live.emotion || "IDLE";
 
     draw(useRealFK ? q : null);
+    
 
     buttons();
 }
@@ -2194,12 +2317,21 @@ async function moveReal(
 // =====================================
 
 // RL_GO_ZERO_ALL_V1
+
+// RL_RETURN_HOME_500_V1
+
 async function goZeroAllReal() {
+
     if (working || mode !== "real") return;
 
+    const HOME_MAX_DELTA = 500;
+    const HOME_SPEED = 80;
+
+    realSequenceCancelled = false;
     setWorking(true);
 
     try {
+
         await refresh();
 
         if (!live.connected || !live.info_ready) {
@@ -2211,13 +2343,12 @@ async function goZeroAllReal() {
         }
 
         if (live.emotion_armed) {
-            throw Error(
-                "DISARM Emotion before GO ZERO ALL"
-            );
+            throw Error("DISARM Emotion first");
         }
 
-        // Validate all four servos BEFORE moving.
+        // Validate all servos before movement.
         const plan = IDS.map(id => {
+
             const s = servo(id);
 
             if (
@@ -2229,16 +2360,7 @@ async function goZeroAllReal() {
                 !Number.isInteger(s.max)
             ) {
                 throw Error(
-                    `Servo ${id}: missing feedback or Zero`
-                );
-            }
-
-            if (
-                s.zero < s.min + 20 ||
-                s.zero > s.max - 20
-            ) {
-                throw Error(
-                    `Servo ${id}: Zero outside safe limits`
+                    `Servo ${id}: feedback unavailable`
                 );
             }
 
@@ -2246,66 +2368,117 @@ async function goZeroAllReal() {
                 s.zero - s.actual
             );
 
-            if (distance > 300) {
+            if (distance > HOME_MAX_DELTA) {
                 throw Error(
                     `Servo ${id}: ${distance} ticks ` +
-                    "exceeds 300. Move manually first."
+                    "exceeds 500"
                 );
             }
 
+            const targets = [];
+
+            // Split long movements automatically.
+            if (distance > 300) {
+                targets.push(
+                    Math.round((s.actual + s.zero) / 2)
+                );
+            }
+
+            targets.push(s.zero);
+
+            for (const target of targets) {
+
+                if (
+                    target < s.min + 20 ||
+                    target > s.max - 20
+                ) {
+                    throw Error(
+                        `Servo ${id}: outside safe limits`
+                    );
+                }
+            }
+
             return {
-                id: id,
-                target: s.zero
+                id,
+                targets,
+                zero: s.zero
             };
         });
 
         message(
             "fk-result",
-            "Returning all four servos to Zero..."
+            "Returning all servos to Home..."
         );
 
-        // One click, four sequential MOVE commands.
         for (const item of plan) {
-            const result = await post(
-                `/api/servo/${item.id}/move`,
-                {
-                    target: item.target,
-                    speed: 80
+
+            for (const target of item.targets) {
+
+                if (realSequenceCancelled) {
+                    throw Error("Home movement cancelled");
                 }
-            );
 
-            $("target-" + item.id).value =
-                item.target;
+                const result = await post(
+                    `/api/servo/${item.id}/move`,
+                    {
+                        target: target,
+                        speed: HOME_SPEED
+                    }
+                );
 
-            log(
-                `GO ZERO Servo ${item.id}: ` +
-                `${result.actual}/${item.target}`
-            );
+                if (realSequenceCancelled) {
+                    throw Error("Home movement cancelled");
+                }
+
+                $("target-" + item.id).value = target;
+
+                log(
+                    `HOME Servo ${item.id}: ` +
+                    `${result.actual}/${target}`
+                );
+            }
         }
 
         await refresh();
+
+        for (const item of plan) {
+            const s = servo(item.id);
+
+            if (
+                !s ||
+                !s.online ||
+                !Number.isInteger(s.actual) ||
+                Math.abs(s.actual - item.zero) > 20
+            ) {
+                throw Error(
+                    `Servo ${item.id}: Home not reached`
+                );
+            }
+        }
 
         message(
             "fk-result",
             "GO ZERO ALL completed: Servo 1-4"
         );
 
-        log("GO ZERO ALL COMPLETED");
+        log("RETURN HOME COMPLETED");
 
     } catch (e) {
+
         message(
             "fk-result",
             "GO ZERO ALL stopped: " + e.message,
             true
         );
 
-        log("GO ZERO ALL ERROR: " + e.message);
+        log("RETURN HOME ERROR: " + e.message);
 
         try {
             await refresh();
         } catch (_) {}
 
     } finally {
+
         setWorking(false);
         render();
     }
@@ -2651,37 +2824,219 @@ function previewFK() {
 // IK SIMULATION
 // =====================================
 
+
+// RL_AUTO_IK_PITCH_V1
+
+
+// RL_AUTO_TCP_HEAD_V2
+
 function getIK() {
+
     const p = {
         x: number("ik-x"),
         y: number("ik-y"),
         z: number("ik-z")
     };
 
-    const pitch = number("ik-pitch");
     const velocity = number("ik-speed");
+    const elbow = $("ik-elbow").value;
+    const auto = $("ik-auto-pitch");
 
-    if (
-        velocity < 1 ||
-        velocity > 50
-    ) {
-        throw Error(
-            "IK velocity 1..50 mm/s"
-        );
+    if (velocity < 1 || velocity > 50) {
+        throw Error("IK velocity 1..50 mm/s");
     }
 
-    return {
-        p,
-        pitch,
-        velocity,
-        q: ik(
+    // Manual mode remains available.
+    if (!auto || !auto.checked) {
+
+        const pitch = number("ik-pitch");
+
+        return {
             p,
             pitch,
-            $("ik-elbow").value,
-            mode === "sim"
+            velocity,
+            q: ik(p, pitch, elbow, mode === "sim")
+        };
+    }
+
+    // Read current joint feedback.
+    const startQ = currentQ();
+
+    if (!startQ) {
+        throw Error("Joint feedback unavailable");
+    }
+
+    if (mode === "real") {
+
+        if (
+            !geom.realCalibrated ||
+            !live.connected ||
+            !live.info_ready ||
+            live.busy ||
+            live.emotion_armed
+        ) {
+            throw Error("REAL robot not ready");
+        }
+
+        if (singularityIndex(startQ) < 0.02) {
+            throw Error(
+                "Near singularity: use FK first"
+            );
+        }
+    }
+
+    const start = fk(startQ);
+
+    const dz = p.z - start.z;
+    const vertical = Math.abs(dz) > 0.05;
+    const direction = Math.sign(dz);
+
+    const currentPitch = start.pitch;
+
+    // Automatic head rotation settings.
+    const DEG_PER_MM = 1.5;
+    const MAX_AUTO_TURN = 30;
+
+    const maxTurn = vertical
+        ? Math.min(
+            MAX_AUTO_TURN,
+            Math.abs(dz) * DEG_PER_MM
         )
-    };
+        : 15;
+
+    // Z+ prefers +90 degrees.
+    // Z- prefers -90 degrees.
+    const desiredPitch = direction * 90;
+
+    const difference = Math.atan2(
+        Math.sin((desiredPitch-currentPitch)*DEG),
+        Math.cos((desiredPitch-currentPitch)*DEG)
+    ) / DEG;
+
+    const preferredTurn = vertical
+        ? clamp(difference, -maxTurn, maxTurn)
+        : 0;
+
+    const turns = [
+        preferredTurn,
+        0,
+        maxTurn,
+        -maxTurn
+    ];
+
+    for (let i = 1; i < maxTurn; i++) {
+        turns.push(i, -i);
+    }
+
+    const candidates = [...new Set(turns)];
+
+    candidates.sort(
+        (a,b) =>
+            Math.abs(a-preferredTurn) -
+            Math.abs(b-preferredTurn)
+    );
+
+    const currentVertical =
+        Math.sin(currentPitch * DEG);
+
+    const alreadyVertical =
+        vertical &&
+        Math.abs(currentVertical-direction) < 0.0001;
+
+    let lastError = "No reachable pose";
+
+    for (const turn of candidates) {
+
+        const pitch = currentPitch + turn;
+
+        const newVertical =
+            Math.sin(pitch * DEG);
+
+        // Prevent opposite head rotation.
+        if (vertical && !alreadyVertical) {
+
+            const improvement =
+                direction *
+                (newVertical-currentVertical);
+
+            if (improvement <= 0.000001) {
+                continue;
+            }
+        }
+
+        if (alreadyVertical &&
+            Math.abs(turn) > 0.000001) {
+            continue;
+        }
+
+        try {
+
+            const q = ik(
+                p,
+                pitch,
+                elbow,
+                mode === "sim"
+            );
+
+            const goal = {
+                p,
+                pitch,
+                velocity,
+                q
+            };
+
+            if (mode === "real") {
+
+                // Preserve existing safety checks.
+                planRealIK(goal);
+
+            } else {
+
+                const distance = Math.hypot(
+                    p.x-start.x,
+                    p.y-start.y,
+                    p.z-start.z
+                );
+
+                const steps = Math.max(
+                    20,
+                    Math.ceil(distance/2),
+                    Math.ceil(Math.abs(turn)/3)
+                );
+
+                for(let i=1; i<=steps; i++) {
+
+                    const t = i/steps;
+
+                    ik(
+                        {
+                            x: start.x+(p.x-start.x)*t,
+                            y: start.y+(p.y-start.y)*t,
+                            z: start.z+(p.z-start.z)*t
+                        },
+                        currentPitch+turn*t,
+                        elbow,
+                        true
+                    );
+                }
+            }
+
+            // Display automatically selected pitch.
+            $("ik-pitch").value = pitch.toFixed(3);
+
+            return goal;
+
+        } catch(e) {
+            lastError = e.message;
+        }
+    }
+
+    throw Error(
+        "Auto head IK: " + lastError +
+        ". Try a smaller step or adjust the pose."
+    );
 }
+
 
 function previewIK() {
     try {
@@ -2970,13 +3325,7 @@ async function moveIKReal() {
         const path = planRealIK(goal);
         const startPosition = fk(realQ());
 
-        if (!window.confirm(
-            `Move through ${path.length} Cartesian waypoints? ` +
-            "Joints move sequentially; no collision detection is available. " +
-            "Clear the workspace and keep the hardware stop accessible."
-        )) {
-            return;
-        }
+        // REAL IK confirmation popup removed
 
         realSequenceCancelled = false;
         setWorking(true);
@@ -3069,36 +3418,156 @@ async function moveIKReal() {
     }
 }
 
+
+let rlAutoHeadJogBusy = false;
+
 async function jogTcp(axis, sign) {
+
+    if (working || rlAutoHeadJogBusy) return;
+
+    rlAutoHeadJogBusy = true;
+
+    const startMode = mode;
+    let ownWorking = false;
+
     try {
+
+        if (!["x","y","z"].includes(axis)) {
+            throw Error("Invalid TCP axis");
+        }
+
+        if (sign !== 1 && sign !== -1) {
+            throw Error("Invalid jog direction");
+        }
+
         const step = number("jog-step");
-        if (!Number.isFinite(step) || step < 1 || step > 20) {
+
+        if (step < 1 || step > 20) {
             throw Error("Jog step must be 1..20 mm");
         }
 
-        const q = mode === "sim" ? [...simQ] : realQ();
-        if (!q) {
-            throw Error("REAL joint feedback/zero unavailable");
+        if (mode === "real") {
+
+            setWorking(true);
+            ownWorking = true;
+
+            await refresh();
+
+            if (
+                !geom.realCalibrated ||
+                !live.connected ||
+                !live.info_ready ||
+                live.busy ||
+                live.emotion_armed
+            ) {
+                throw Error("REAL robot not ready");
+            }
         }
 
-        const p = fk(q);
-        p[axis] += step * sign;
+        const q = currentQ();
 
-        $("ik-x").value = fmt(p.x);
-        $("ik-y").value = fmt(p.y);
-        $("ik-z").value = fmt(p.z);
-        $("ik-pitch").value = fmt(p.pitch);
+        if (!q) {
+            throw Error("Joint feedback unavailable");
+        }
 
-        if (mode === "sim") {
+        // Use actual TCP endpoint, not J4 pivot.
+        const start = fk(q);
+
+        const target = {
+            x: start.x,
+            y: start.y,
+            z: start.z
+        };
+
+        target[axis] += step * sign;
+
+        $("ik-x").value = target.x.toFixed(3);
+        $("ik-y").value = target.y.toFixed(3);
+        $("ik-z").value = target.z.toFixed(3);
+
+        $("ik-pitch").value =
+            start.pitch.toFixed(3);
+
+        $("ik-elbow").value =
+            q[2] >= 0 ? "up" : "down";
+
+        // Keep Auto rotate J4 enabled.
+        // getIK() calculates the head angle.
+
+        if (ownWorking) {
+            setWorking(false);
+            ownWorking = false;
+        }
+
+        if (startMode === "sim") {
             await moveIK();
         } else {
             await moveIKReal();
         }
 
-    } catch (e) {
-        message("ik-result", e.message, true);
+        const result = $("ik-result");
+
+        if (
+            result.classList.contains("error") ||
+            !/completed/i.test(result.textContent)
+        ) {
+            return;
+        }
+
+        // Verify result using joint feedback.
+        if (mode === "real") {
+
+            setWorking(true);
+            ownWorking = true;
+
+            await sleep(500);
+            await refresh();
+        }
+
+        const finalQ = currentQ();
+
+        if (!finalQ || mode !== startMode) {
+            throw Error("Final feedback unavailable");
+        }
+
+        const actual = fk(finalQ);
+
+        const error = Math.hypot(
+            actual.x-target.x,
+            actual.y-target.y,
+            actual.z-target.z
+        );
+
+        message(
+            "ik-result",
+
+            "TCP Jog completed | " +
+            "dX=" + (actual.x-start.x).toFixed(2) +
+            " mm | dY=" + (actual.y-start.y).toFixed(2) +
+            " mm | dZ=" + (actual.z-start.z).toFixed(2) +
+            " mm | J4=" + finalQ[3].toFixed(2) +
+            " deg | Pitch=" + actual.pitch.toFixed(2) +
+            " deg | Error=" + error.toFixed(2) + " mm",
+
+            error > 3
+        );
+
+    } catch(e) {
+
+        message("ik-result",e.message,true);
+
+    } finally {
+
+        rlAutoHeadJogBusy = false;
+
+        if (ownWorking) {
+            setWorking(false);
+        }
+
+        render();
     }
 }
+
 
 // =====================================
 // SAVE GEOMETRY
@@ -3106,7 +3575,12 @@ async function jogTcp(axis, sign) {
 
 function saveGeometry() {
     try {
+        if (working || live.busy || live.emotion_armed) {
+            throw Error("Stop motion and DISARM before saving geometry");
+        }
+
         const g = {
+            geometryVersion: 2,
             h: number("g-h"),
             l1: number("g-l1"),
             l2: number("g-l2"),
@@ -3224,7 +3698,32 @@ function init() {
 
     } catch (_) {}
 
+
+    // RL_GEOMETRY_SAVE_V2
+    if (geom.geometryVersion !== 2) {
+
+        geom = {
+            ...geom,
+            h: DEFAULT.h,
+            l1: DEFAULT.l1,
+            l2: DEFAULT.l2,
+            l3: DEFAULT.l3,
+            geometryVersion: 2,
+            realCalibrated: false
+        };
+
+        try {
+            localStorage.setItem(
+                "robot_lamp_geometry",
+                JSON.stringify(geom)
+            );
+        } catch (e) {
+            console.error("Geometry save failed", e);
+        }
+    }
+
     let savedSpeeds = {};
+
 
     try {
         savedSpeeds = JSON.parse(
@@ -3415,7 +3914,7 @@ function init() {
         if (
             Number.isInteger(savedSpeeds[id]) &&
             savedSpeeds[id] >= 40 &&
-            savedSpeeds[id] <= 500
+            savedSpeeds[id] <= 800
         ) {
             $("real-speed-" + id).value =
                 savedSpeeds[id];
@@ -3519,6 +4018,35 @@ function init() {
 
     $("go-zero-all").onclick = goZeroAllReal;
 
+    $("ik-home-real").onclick = async () => {
+
+        if (
+            mode !== "real" ||
+            working ||
+            live.busy ||
+            live.emotion_armed ||
+            $("ik-home-real").disabled
+        ) return;
+
+        if (!confirm(
+            "Return all four servos to saved Home? " +
+            "Stop camera and check workspace first."
+        )) return;
+
+        message(
+            "ik-result",
+            "Returning Servo 1-4 to Home..."
+        );
+
+        await goZeroAllReal();
+
+        $("ik-result").textContent =
+            $("fk-result").textContent;
+
+        $("ik-result").className =
+            $("fk-result").className;
+    };
+
     $("fk-home").onclick =
         () => moveSim(
             IDS,
@@ -3553,8 +4081,32 @@ function init() {
         cancelReal;
 
     // SETUP.
-    $("save-geometry").onclick =
-        saveGeometry;
+    
+    $("save-geometry").onclick = saveGeometry;
+
+    for (const key of ["h", "l1", "l2", "l3"]) {
+
+        $("g-" + key).addEventListener("change", () => {
+
+            if (working || live.busy || live.emotion_armed) {
+                $("g-" + key).value = geom[key];
+
+                message(
+                    "setup-result",
+                    "Stop motion and DISARM first",
+                    true
+                );
+
+                return;
+            }
+
+            // Geometry changes require calibration again.
+            $("calibrated-check").checked = false;
+
+            saveGeometry();
+        });
+    }
+
 
     $("reset-measured-geometry").onclick = () => {
         $("g-h").value = DEFAULT.h;
