@@ -1,3 +1,4 @@
+# RL_FK_FULL_RANGE_V2
 
 """
 Robot Lamp Flask Dashboard
@@ -42,6 +43,10 @@ MARGIN = 20
 TOLERANCE = 20
 
 DIRECT_MOVE_MAX_DELTA = 300
+
+# RL_MANUAL_FK_800_V1
+FK_MANUAL_MAX_DELTA = 800
+FK_MANUAL_MIN_MARGIN = 0
 DIRECT_MOVE_TIMEOUT = 15.0
 
 SPEED_MIN = 40
@@ -404,7 +409,7 @@ def transact(command, timeout=5):
                 return lines
 
         # MOVE.
-        elif command.startswith("MOVE "):
+        elif command.startswith(("MOVE ", "MOVEFK ")):
             if MOVE_RE.fullmatch(line):
                 return lines
 
@@ -454,6 +459,77 @@ def transact(command, timeout=5):
 # READ ACTUAL POSITIONS
 # ==========================================
 
+
+# RL_REALTIME_KINEMATICS_V1
+
+from collections import deque
+
+rl_rt_samples = deque(maxlen=2048)
+rl_rt_boot = str(time.time_ns())
+
+@app.get("/api/kinematics/live")
+def api_kinematics_live():
+
+    after = request.args.get(
+        "after", -1, type=int
+    )
+
+    with state_lock:
+
+        now = time.monotonic()
+
+        age = (
+            now - state["position_at"]
+            if state["position_at"] > 0
+            else None
+        )
+
+        online = all(
+            servos[i]["online"]
+            and type(servos[i]["actual"]) is int
+            and type(servos[i]["zero"]) is int
+            for i in IDS
+        )
+
+        ready = bool(
+            state["connected"]
+            and state["info_ready"]
+            and online
+            and age is not None
+            and age < 8
+            and now - state["info_at"] < 70
+        )
+
+        samples = list(rl_rt_samples)
+
+        latest = (
+            samples[-1]["seq"]
+            if samples else 0
+        )
+
+        if after < 0 or after > latest:
+            samples = samples[-1:]
+        else:
+            samples = [
+                s for s in samples
+                if s["seq"] > after
+            ]
+
+        return jsonify(
+            ok=True,
+            boot=rl_rt_boot,
+            ready=ready,
+            age=age,
+            busy=state["busy"],
+            latest=latest,
+            samples=samples,
+            servos=[
+                dict(servos[i])
+                for i in IDS
+            ]
+        )
+
+
 def read_positions():
     lines = transact("READPOS", 8)
 
@@ -475,6 +551,23 @@ def read_positions():
 
         state["connected"] = True
         state["position_at"] = time.monotonic()
+
+        rl_rt_samples.append({
+            "seq": (
+                rl_rt_samples[-1]["seq"] + 1
+                if rl_rt_samples else 1
+            ),
+            "t": state["position_at"],
+            "ticks": [
+                servos[i]["actual"]
+                for i in IDS
+            ],
+            "zero": [
+                servos[i]["zero"]
+                for i in IDS
+            ]
+        })
+
 
 # ==========================================
 # READ SERVO INFORMATION
@@ -534,7 +627,7 @@ def refresh(force_info=False):
 # VALIDATE FEEDBACK
 # ==========================================
 
-def checked_servo(i, target=None):
+def checked_servo(i, target=None, manual_fk=False):
     with state_lock:
         s = dict(servos[i])
 
@@ -590,14 +683,20 @@ def checked_servo(i, target=None):
         )
 
     if target is not None:
+
+        min_margin = (
+            FK_MANUAL_MIN_MARGIN
+            if manual_fk else MARGIN
+        )
+
         if not (
-            low + MARGIN
+            low + min_margin
             <= target
-            <= high - MARGIN
+            <= high - min_margin
         ):
             raise ValueError(
                 f"Servo {i}: target must be "
-                f"{low+MARGIN}..{high-MARGIN}"
+                f"{low+min_margin}..{high-min_margin}"
             )
 
     return s
@@ -650,7 +749,8 @@ def background_poll():
 def move_absolute(
     i,
     target,
-    speed=80
+    speed=80,
+    manual_fk=False
 ):
     """
     Direct movement:
@@ -667,15 +767,22 @@ def move_absolute(
 
     refresh(force_info=True)
 
-    s = checked_servo(i, target)
+    s = checked_servo(
+        i, target, manual_fk=manual_fk
+    )
     before = s["actual"]
 
     distance = abs(target - before)
 
-    if distance > DIRECT_MOVE_MAX_DELTA:
+    max_delta = (
+        FK_MANUAL_MAX_DELTA
+        if manual_fk else DIRECT_MOVE_MAX_DELTA
+    )
+
+    if distance > max_delta:
         raise ValueError(
             f"Servo {i}: {distance} ticks "
-            f"exceeds {DIRECT_MOVE_MAX_DELTA}; "
+            f"exceeds {max_delta}; "
             "no command sent"
         )
 
@@ -698,8 +805,10 @@ def move_absolute(
     with state_lock:
         state["emotion_armed"] = False
 
+    move_command = "MOVEFK" if manual_fk else "MOVE"
+
     lines = transact(
-        f"MOVE {i} {target} {speed}",
+        f"{move_command} {i} {target} {speed}",
         8
     )
 
@@ -729,7 +838,7 @@ def move_absolute(
 
     deadline = (
         time.monotonic()
-        + DIRECT_MOVE_TIMEOUT
+        + (30.0 if manual_fk else DIRECT_MOVE_TIMEOUT)
     )
 
     actual = before
@@ -741,7 +850,15 @@ def move_absolute(
 
         actual = checked_servo(i)["actual"]
 
-        if abs(actual - target) <= TOLERANCE:
+        tolerance = (
+            1 if manual_fk and (
+                target <= s["min"] + MARGIN
+                or target >= s["max"] - MARGIN
+            )
+            else TOLERANCE
+        )
+
+        if abs(actual - target) <= tolerance:
             return dict(
                 id=i,
                 before=before,
@@ -1318,6 +1435,8 @@ def api_zero(sid):
 # MANUAL MOVE API
 # ==========================================
 
+
+
 @app.post("/api/servo/<int:sid>/move")
 def api_move(sid):
     if sid not in IDS:
@@ -1365,7 +1484,10 @@ def api_move(sid):
     try:
         with serial_lock:
             result = move_absolute(
-                sid, target, speed
+                sid,
+                target,
+                speed,
+                manual_fk=data.get("manual_fk") is True
             )
 
         return jsonify(

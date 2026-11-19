@@ -1,3 +1,4 @@
+// RL_FK_FULL_RANGE_V2
 
 /*
   Robot Lamp V1.8
@@ -37,6 +38,11 @@ constexpr uint8_t IDS[4] = {1, 2, 3, 4};
 
 constexpr int SAFE_MARGIN = 20;
 constexpr int MAX_MANUAL_STEP = 300;
+
+// RL_MANUAL_FK_800_V1
+constexpr int FK_MANUAL_MAX_STEP = 800;
+constexpr int FK_MANUAL_MIN_MARGIN = 0;
+
 constexpr int EMOTION_DELTA_LIMIT = 800;
 constexpr int EMOTION_ARM_MARGIN = 60;
 
@@ -991,7 +997,8 @@ bool servoChecks(
 bool moveServo(
     uint8_t id,
     uint16_t target,
-    uint16_t speed
+    uint16_t speed,
+    bool manualFK = false
 ) {
     uint16_t actual, lo, hi, tq;
 
@@ -1004,23 +1011,43 @@ bool moveServo(
         return false;
     }
 
+    const int minMargin =
+        manualFK ? FK_MANUAL_MIN_MARGIN : SAFE_MARGIN;
+
+    const int maxStep =
+        manualFK ? FK_MANUAL_MAX_STEP : MAX_MANUAL_STEP;
+
     if (
-        target < lo + SAFE_MARGIN ||
-        target > hi - SAFE_MARGIN ||
+        target < lo + minMargin ||
+        target > hi - minMargin ||
         abs(
             (int)target - (int)actual
-        ) > MAX_MANUAL_STEP
+        ) > maxStep
     ) {
         Serial.printf(
             "[MOVE REJECT] ID=%u FROM=%u "
             "TARGET=%u ALLOWED=%u..%u "
             "MAX_STEP=%d\n",
             id, actual, target,
-            lo + SAFE_MARGIN,
-            hi - SAFE_MARGIN,
-            MAX_MANUAL_STEP
+            lo + minMargin,
+            hi - minMargin,
+            maxStep
         );
         return false;
+    }
+
+    // Slow down long or near-limit manual moves.
+    if (
+        manualFK &&
+        (
+            target <= lo + SAFE_MARGIN ||
+            target >= hi - SAFE_MARGIN ||
+            actual >= hi - SAFE_MARGIN ||
+            actual < lo + SAFE_MARGIN ||
+            abs((int)target - (int)actual) > 300
+        )
+    ) {
+        if (speed > 80) speed = 80;
     }
 
     // Hold position before enabling torque.
@@ -2344,7 +2371,18 @@ void command(String cmd) {
     }
 
     // MANUAL MOVE.
-    if (cmd.startsWith("MOVE ")) {
+    if (
+        cmd.startsWith("MOVE ") ||
+        cmd.startsWith("MOVEFK ")
+    ) {
+
+        const bool manualFK =
+            cmd.startsWith("MOVEFK ");
+
+        if (manualFK) {
+            cmd = String("MOVE ") + cmd.substring(7);
+        }
+
         unsigned int id = 0;
         unsigned int target = 0;
         unsigned int v = DEFAULT_SPEED;
@@ -2392,7 +2430,8 @@ void command(String cmd) {
             moveServo(
                 (uint8_t)id,
                 (uint16_t)target,
-                (uint16_t)v
+                (uint16_t)v,
+                manualFK
             );
         } else {
             Serial.println(
