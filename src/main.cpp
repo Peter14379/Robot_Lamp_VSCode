@@ -1036,19 +1036,9 @@ bool moveServo(
         return false;
     }
 
-    // Slow down long or near-limit manual moves.
-    if (
-        manualFK &&
-        (
-            target <= lo + SAFE_MARGIN ||
-            target >= hi - SAFE_MARGIN ||
-            actual >= hi - SAFE_MARGIN ||
-            actual < lo + SAFE_MARGIN ||
-            abs((int)target - (int)actual) > 300
-        )
-    ) {
-        if (speed > 80) speed = 80;
-    }
+    // RL_FK_DIRECT_SPEED_V1
+    // Use requested manual FK speed directly.
+    // Hardware position limits remain active.
 
     // Hold position before enabling torque.
     if (tq == 0) {

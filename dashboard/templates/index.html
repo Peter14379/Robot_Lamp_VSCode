@@ -749,7 +749,7 @@ body.sim .real-only {
             <p class="muted real-only">
                 DISARM Emotion first.
                 Return Servo 1-4 to saved Zero,
-                one by one at RAW 80.
+                one by one at the saved RAW velocity.
             </p>
 
             <div class="actions sim-only">
@@ -775,6 +775,64 @@ body.sim .real-only {
             </div>
 
             <p class="msg muted" id="fk-result"></p>
+
+<!-- RL_FK_SAVED_POSITIONS_V1 -->
+
+<div class="card real-only"
+     id="rl-saved-positions"
+     style="margin-top:20px">
+
+    <h2>Saved Positions - FK</h2>
+
+    <p class="muted">
+        Teach & Replay | Actual Servo Feedback
+    </p>
+
+    <label>Position name</label>
+
+    <input id="rl-pose-name"
+           type="text"
+           maxlength="80"
+           placeholder="Enter position name..."
+           style="width:100%">
+
+    <div class="actions">
+        <button id="rl-pose-save" class="primary">
+            SAVE CURRENT POSITION
+        </button>
+
+        <button id="rl-pose-home">
+            RETURN HOME
+        </button>
+
+        <button id="rl-pose-refresh">
+            REFRESH LIST
+        </button>
+    </div>
+
+    <p class="muted" id="rl-pose-actual"></p>
+
+    <p class="msg muted" id="rl-pose-status"></p>
+
+    <h3>Saved Positions</h3>
+
+    <p class="muted" id="rl-pose-count"></p>
+
+    <div id="rl-pose-list"
+         style="max-height:500px;
+                overflow-y:auto;
+                padding:3px">
+    </div>
+
+    <p class="muted">
+        Replay uses sequential joint movement
+        at the saved RAW velocity.
+        No collision detection.
+        Check the movement path first.
+    </p>
+</div>
+
+
         </div>
 
         <div class="panel" id="panel-ik">
@@ -2208,10 +2266,14 @@ function ik(p, pitch, elbow, enforceDemoLimits = true) {
 // REAL JOINT ANGLES
 // =====================================
 
+// RL_ACTUAL_SERIAL_FEEDBACK_V1
+
 function realQ() {
     if (
         !live.connected ||
-        !live.info_ready
+        !live.info_ready ||
+        !Number.isFinite(live.feedback_age_s) ||
+        live.feedback_age_s >= 8
     ) {
         return null;
     }
@@ -2272,13 +2334,13 @@ function draw(q) {
     for (const id of ["side", "top-view"]) {
 
         const canvas = $(id);
-        canvas.style.height = "300px";
+        canvas.style.height = "420px";
 
         const rect = canvas.getBoundingClientRect();
         const dpr = window.devicePixelRatio || 1;
 
         const w = Math.max(100, rect.width);
-        const h = 300;
+        const h = 420;
 
         canvas.width = Math.round(w * dpr);
         canvas.height = Math.round(h * dpr);
@@ -2704,10 +2766,14 @@ function render() {
 
     $("position-source").textContent =
         mode === "sim"
-            ? "SIMULATION • calculated from configured kinematic model"
-            : geom.realCalibrated
-                ? "REAL • FK estimate from calibrated model (not sensor-measured XYZ)"
-                : "REAL • set actual geometry and Home angles in Setup/Zero";
+            ? "SIMULATION"
+            : !q
+                ? "REAL | Feedback unavailable or stale"
+                : !geom.realCalibrated
+                    ? "REAL | Calibration required"
+                    : "LIVE SERIAL FEEDBACK | Age: " +
+                      live.feedback_age_s.toFixed(2) +
+                      " s | TCP: FK estimate";
 
     for (const id of IDS) {
         const s = servo(id);
@@ -2783,18 +2849,40 @@ function setWorking(v) {
 // HTTP API
 // =====================================
 
+let rlStatusBusy = false;
+
 async function getStatus() {
+
+    if (rlStatusBusy) return;
+
+    rlStatusBusy = true;
+    const before = live;
+
     try {
-        const r = await fetch(
-            "/api/status",
-            { cache: "no-store" }
-        );
+
+        const r = await fetch("/api/status", {
+            cache: "no-store",
+            signal: AbortSignal.timeout(3000)
+        });
 
         if (!r.ok) {
             throw Error("Server error");
         }
 
-        live = await r.json();
+        const next = await r.json();
+
+        // Do not overwrite newer feedback
+        // received by a manual refresh.
+
+        if (
+            live !== before &&
+            (next.position_at || 0) <
+            (live.position_at || 0)
+        ) {
+            return;
+        }
+
+        live = next;
 
         $("connection").textContent =
             live.connected
@@ -2807,6 +2895,9 @@ async function getStatus() {
                 : "#ff9da6";
 
     } catch (e) {
+
+        if (live !== before) return;
+
         live = {
             connected: false,
             info_ready: false,
@@ -2820,12 +2911,26 @@ async function getStatus() {
 
         $("connection").style.color =
             "#ff9da6";
+
+    } finally {
+        rlStatusBusy = false;
     }
 
     render();
 }
 
 async function post(url, data = {}) {
+
+    if(
+        /^\/api\/servo\/\d+\/move$/.test(url) ||
+        (
+            url === "/api/fk/positions" &&
+            data.action === "move"
+        )
+    ){
+        window.rlXYZModelCheck?.();
+    }
+
     const r = await fetch(url, {
         method: "POST",
         headers: {
@@ -3865,6 +3970,15 @@ function rlCheckSimPath(goal, elbow) {
 
 function getIK() {
 
+    window.rlXYZModelCheck?.();
+
+    window.rlXYZCheck?.({
+        x:number("ik-x"),
+        y:number("ik-y"),
+        z:number("ik-z")
+    });
+
+
     let originalError;
 
     // Try the original solver first.
@@ -4435,6 +4549,11 @@ function planRealIK(goal) {
                 );
             }
         }
+
+        window.rlXYZPath?.(
+            previousTicks,
+            targets.map(item => item.target)
+        );
 
         path.push({ targets, q });
         previousTicks = targets.map(item => item.target);
@@ -5373,7 +5492,7 @@ function init() {
 
     setInterval(
         getStatus,
-        2000
+        500
     );
 
     getStatus();
@@ -9832,7 +9951,7 @@ Waiting for real feedback
         </div>
 
         <div id="rl-ws-canvas-wrap">
-            <canvas id="rl-ws-canvas" width="1200" height="720"></canvas>
+            <canvas id="rl-ws-canvas" width="1200" height="820"></canvas>
         </div>
 
         <p class="muted" style="margin-top:12px;">
@@ -12824,6 +12943,1680 @@ Waiting for real feedback
 </script>
 
 
-<script type="module" src="/static/robot_cad/viewer.js?v=6"></script>
+<script type="module" src="/static/robot_cad/viewer.js?v=6-live1"></script>
+
+<script>
+
+// RL_FK_SAVED_POSITIONS_V1
+
+(function(){
+
+    const get = id => document.getElementById(id);
+
+    const root = get("rl-saved-positions");
+
+    if(!root) return;
+
+    let poses = [];
+    let pending = false;
+
+    function status(text,bad=false){
+
+        const el = get("rl-pose-status");
+
+        el.textContent = text;
+
+        el.className =
+            "msg " + (bad ? "error" : "ok");
+    }
+
+    function ready(){
+
+        return (
+            mode === "real" &&
+            live.connected &&
+            live.info_ready &&
+            !live.busy &&
+            !live.emotion_armed &&
+            !working &&
+            !pending
+        );
+    }
+
+    function controls(){
+
+        const canMove = ready();
+
+        get("rl-pose-save").disabled = !canMove;
+
+        get("rl-pose-home").disabled = !canMove;
+
+        get("rl-pose-refresh").disabled =
+            pending || working;
+
+        root.querySelectorAll("[data-pose-action]")
+            .forEach(b => {
+
+                b.disabled =
+                    b.dataset.poseAction === "move"
+                        ? !canMove
+                        : pending || working || live.busy;
+            });
+
+        get("rl-pose-actual").textContent =
+            IDS.map(id => {
+
+                const s = servo(id);
+
+                return "J" + id + ": " + (
+                    s?.online
+                        ? s.actual
+                        : "--"
+                );
+
+            }).join(" | ") + " ticks";
+    }
+
+    function renderList(){
+
+        const list = get("rl-pose-list");
+
+        list.replaceChildren();
+
+        get("rl-pose-count").textContent =
+            poses.length + " saved positions";
+
+        if(!poses.length){
+
+            list.textContent = "No saved positions";
+
+            controls();
+
+            return;
+        }
+
+        for(const pose of poses){
+
+            const card = document.createElement("div");
+
+            card.className = "card";
+            card.style.marginBottom = "10px";
+            card.style.padding = "14px";
+
+            const title = document.createElement("h3");
+
+            title.textContent = pose.name;
+
+            const values = document.createElement("p");
+
+            values.className = "muted";
+
+            values.textContent =
+                pose.ticks.map(
+                    (t,i) => "J"+(i+1)+": "+t
+                ).join(" | ") + " ticks";
+
+            const date = document.createElement("p");
+
+            date.className = "muted";
+
+            date.textContent = pose.created || "";
+
+            const actions = document.createElement("div");
+
+            actions.className = "actions";
+
+            const move = document.createElement("button");
+
+            move.textContent = "GO TO";
+            move.className = "primary";
+            move.dataset.poseAction = "move";
+
+            move.onclick = () => {
+
+                if(!ready()) return;
+
+                if(!confirm(
+                    "Move to " + pose.name +
+                    " at RAW " + (pose.speed ?? 80) +
+                    "? Check the path first."
+                )) return;
+
+                perform("move",pose.id);
+            };
+
+            const del = document.createElement("button");
+
+            del.textContent = "DELETE";
+            del.className = "danger";
+            del.dataset.poseAction = "delete";
+
+            del.onclick = () => {
+
+                if(!confirm(
+                    "Delete " + pose.name + "?"
+                )) return;
+
+                perform("delete",pose.id);
+            };
+
+            actions.append(move,del);
+
+            const speedPanel = document.createElement("div");
+
+            speedPanel.style.cssText =
+                "background:#091d30;padding:15px;" +
+                "border-radius:12px;margin:12px 0";
+
+            const speedLabel = document.createElement("strong");
+
+            const slider = document.createElement("input");
+
+            slider.type = "range";
+            slider.min = "40";
+            slider.max = "800";
+            slider.step = "1";
+            slider.value = pose.speed ?? 80;
+
+            slider.style.cssText =
+                "width:100%;accent-color:#76e7c4;margin:16px 0";
+
+            const display = () => {
+                speedLabel.textContent =
+                    "Replay Velocity: " + slider.value + " RAW";
+            };
+
+            slider.oninput = display;
+            display();
+
+            const saveSpeed = document.createElement("button");
+
+            saveSpeed.textContent = "SAVE SPEED";
+            saveSpeed.dataset.poseAction = "speed";
+
+            saveSpeed.onclick = () => {
+
+                if(pending || working || live.busy) return;
+
+                perform(
+                    "speed",
+                    pose.id,
+                    Number(slider.value)
+                );
+            };
+
+            speedPanel.append(
+                speedLabel,
+                slider,
+                saveSpeed
+            );
+
+            card.append(
+                title,values,date,speedPanel,actions
+            );
+
+            list.append(card);
+        }
+
+        controls();
+    }
+
+    async function load(){
+
+        if(pending || working) return;
+
+        pending = true;
+        controls();
+
+        try{
+
+            const response = await fetch(
+                "/api/fk/positions",
+                {cache:"no-store"}
+            );
+
+            const data = await response.json();
+
+            if(!response.ok || !data.ok){
+                throw Error(
+                    data.error || "Cannot load positions"
+                );
+            }
+
+            poses = data.poses;
+
+            renderList();
+
+        }catch(e){
+
+            status(e.message,true);
+
+        }finally{
+
+            pending = false;
+            controls();
+        }
+    }
+
+    async function perform(action,id=null,speed=null){
+
+        if(pending || working) return;
+
+        const hardware = ["capture","move"].includes(action);
+
+        if(hardware && !ready()) return;
+
+        pending = true;
+
+        if(hardware){
+            setWorking(true);
+        }
+
+        controls();
+
+        try{
+
+            status(
+                action === "move"
+                    ? "Moving to saved position..."
+                    : "Processing..."
+            );
+
+            const data = await post(
+                "/api/fk/positions",
+                {
+                    action:action,
+                    id:id,
+                    speed:speed,
+                    name:get("rl-pose-name").value
+                }
+            );
+
+            if(Array.isArray(data.poses)){
+
+                poses = data.poses;
+                renderList();
+            }
+
+            if(action === "capture"){
+
+                get("rl-pose-name").value = "";
+
+                status(
+                    "Saved: " + data.pose.name
+                );
+
+            }else if(action === "speed"){
+
+                status("Replay velocity saved");
+
+            }else if(action === "delete"){
+
+                status("Position deleted");
+
+            }else{
+
+                status(
+                    "Reached: " + data.name +
+                    " | Actual: " +
+                    data.actual.join(", ") +
+                    " | Error: " +
+                    data.errors.join(", ") +
+                    " ticks"
+                );
+
+                log(
+                    "SAVED POSITION: " + data.name
+                );
+            }
+
+        }catch(e){
+
+            status(e.message,true);
+
+        }finally{
+
+            if(hardware){
+
+                try{
+                    await getStatus();
+                }catch(_){}
+
+                setWorking(false);
+            }
+
+            pending = false;
+
+            controls();
+        }
+    }
+
+    get("rl-pose-save").onclick =
+        () => perform("capture");
+
+    get("rl-pose-home").onclick = () => {
+
+        if(!ready()) return;
+
+        if(confirm(
+            "Return to Home? Check the movement path."
+        )){
+            goZeroAllReal();
+        }
+    };
+
+    get("rl-pose-refresh").onclick = load;
+
+    setInterval(controls,500);
+
+    load();
+
+    console.log("SAVED POSITIONS READY");
+
+})();
+
+</script>
+
+
+<style>
+/* RL_FK_SERVO_SLIDERS_V1 */
+
+.rl-fk-slider {
+    margin-top: 15px;
+    padding: 14px;
+    background: #091b2e;
+    border: 1px solid #2e4e66;
+    border-radius: 12px;
+}
+
+.rl-fk-slider-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+}
+
+.rl-fk-slider-value {
+    font-size: 23px;
+    font-weight: bold;
+    color: #76e7c4;
+}
+
+.rl-fk-slider input[type="range"] {
+    width: 100%;
+    height: 10px;
+    padding: 0;
+    margin: 12px 0;
+    accent-color: #76e7c4;
+    cursor: pointer;
+}
+
+.rl-fk-slider input[type="range"]:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.rl-fk-slider-limits {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: #a5bfd0;
+}
+
+.rl-fk-speed {
+    accent-color: #80b5ff !important;
+}
+</style>
+
+<script>
+(function(){
+
+    const get = id => document.getElementById(id);
+
+    function install(){
+
+        for(const id of [1,2,3,4]){
+
+            const target = get("target-"+id);
+            const speed = get("real-speed-"+id);
+
+            if(!target || !speed) continue;
+
+            const card = target.closest(".servo-card");
+
+            if(!card || get("rl-fk-target-"+id)) continue;
+
+            const panel = document.createElement("div");
+
+            panel.className = "rl-fk-slider real-only";
+
+            panel.innerHTML = `
+                <div class="rl-fk-slider-head">
+                    <span>Position Slider</span>
+                    <span class="rl-fk-slider-value"
+                          id="rl-fk-target-value-${id}">--</span>
+                </div>
+
+                <input type="range"
+                       id="rl-fk-target-${id}"
+                       min="0" max="1023" step="1"
+                       disabled>
+
+                <div class="rl-fk-slider-limits">
+                    <span id="rl-fk-min-${id}">--</span>
+                    <span id="rl-fk-actual-${id}">Actual: --</span>
+                    <span id="rl-fk-max-${id}">--</span>
+                </div>
+
+                <hr style="opacity:0.2;margin:18px 0">
+
+                <div class="rl-fk-slider-head">
+                    <span>Velocity Slider</span>
+                    <span class="rl-fk-slider-value"
+                          style="color:#80b5ff"
+                          id="rl-fk-speed-value-${id}">--</span>
+                </div>
+
+                <input type="range"
+                       class="rl-fk-speed"
+                       id="rl-fk-speed-${id}"
+                       min="40" max="800" step="1"
+                       disabled>
+
+                <div class="rl-fk-slider-limits">
+                    <span>40 RAW</span>
+                    <span>800 RAW</span>
+                </div>
+            `;
+
+            card.querySelector(".servo-fields").after(panel);
+
+            const ts = get("rl-fk-target-"+id);
+            const vs = get("rl-fk-speed-"+id);
+
+            // Slider -> Target ticks
+            ts.addEventListener("input", () => {
+                target.value = ts.value;
+                sync();
+            });
+
+            // Slider -> Velocity RAW
+            vs.addEventListener("input", () => {
+                speed.value = vs.value;
+                sync();
+            });
+
+            vs.addEventListener("change", () => {
+                speed.dispatchEvent(new Event("change"));
+            });
+
+            // Number input -> Slider
+            target.addEventListener("input", sync);
+            speed.addEventListener("input", sync);
+        }
+
+        sync();
+    }
+
+    function sync(){
+
+        for(const id of [1,2,3,4]){
+
+            const ts = get("rl-fk-target-"+id);
+            const vs = get("rl-fk-speed-"+id);
+
+            if(!ts || !vs) continue;
+
+            const target = get("target-"+id);
+            const speed = get("real-speed-"+id);
+            const s = servo(id);
+
+            const valid = Boolean(
+                mode === "real" &&
+                live.connected &&
+                live.info_ready &&
+                s && s.online &&
+                Number.isInteger(s.actual) &&
+                Number.isInteger(s.min) &&
+                Number.isInteger(s.max) &&
+                s.max > s.min
+            );
+
+            const locked =
+                working ||
+                live.busy ||
+                live.emotion_armed;
+
+            ts.disabled = !valid || locked;
+            vs.disabled = !valid || locked;
+
+            if(valid){
+
+                ts.min = s.min;
+                ts.max = s.max;
+
+                target.min = s.min;
+                target.max = s.max;
+
+                if(target.value !== ""){
+                    ts.value = target.value;
+                }
+
+                get("rl-fk-min-"+id).textContent =
+                    s.min + " ticks";
+
+                get("rl-fk-max-"+id).textContent =
+                    s.max + " ticks";
+
+                get("rl-fk-actual-"+id).textContent =
+                    "Actual: " + s.actual;
+            }
+            else{
+
+                get("rl-fk-min-"+id).textContent = "--";
+                get("rl-fk-max-"+id).textContent = "--";
+                get("rl-fk-actual-"+id).textContent =
+                    "Feedback unavailable";
+            }
+
+            if(speed.value !== ""){
+                vs.value = speed.value;
+            }
+
+            get("rl-fk-target-value-"+id).textContent =
+                (target.value || "--") + " ticks";
+
+            get("rl-fk-speed-value-"+id).textContent =
+                (speed.value || "--") + " RAW";
+        }
+    }
+
+    function boot(){
+        install();
+        setInterval(sync,200);
+        console.log("FK SERVO SLIDERS READY");
+    }
+
+    if(document.readyState === "loading"){
+        document.addEventListener("DOMContentLoaded",boot);
+    }else{
+        boot();
+    }
+
+})();
+</script>
+
+
+<!-- RL_SAVED_SPEED_XYZ_LIMIT_V1 -->
+
+<style>
+
+#rl-ws-canvas {
+    width:100% !important;
+    height:auto !important;
+    aspect-ratio:1200 / 820;
+}
+
+#rl-motion-limits {
+    background:#10283b;
+    border:1px solid #355570;
+    padding:20px;
+    border-radius:14px;
+    margin:20px 0;
+}
+
+#rl-motion-limits .rl-limit-row {
+    display:grid;
+    grid-template-columns:70px 1fr 1fr;
+    align-items:center;
+    gap:12px;
+    margin:12px 0;
+}
+
+#rl-motion-limits input[type=number] {
+    width:100%;
+    min-width:0;
+}
+
+#rl-motion-limits strong {
+    font-size:20px;
+}
+
+#rl-motion-limits .rl-current {
+    background:#091d30;
+    padding:14px;
+    border-radius:10px;
+    margin:16px 0;
+}
+
+</style>
+
+<script>
+(function(){
+
+    const get = id => document.getElementById(id);
+
+    const anchor = get("rl-ws-canvas-wrap");
+
+    if(!anchor) return;
+
+    const panel = document.createElement("div");
+
+    panel.id = "rl-motion-limits";
+
+    panel.innerHTML = `
+        <h2>Cartesian Motion Limit</h2>
+
+        <p class="muted">
+            Configure allowable TCP XYZ boundaries in mm.
+        </p>
+
+        <label>
+            <input type="checkbox" id="rl-limit-enable">
+            Enable XYZ Motion Limit
+        </label>
+
+        <div class="rl-limit-row">
+            <span>Axis</span>
+            <span>Minimum (mm)</span>
+            <span>Maximum (mm)</span>
+        </div>
+
+        ${["x","y","z"].map((axis,i)=>`
+            <div class="rl-limit-row">
+
+                <strong style="color:${
+                    ["#ff8585","#76e7c4","#80b5ff"][i]
+                }">
+                    ${axis.toUpperCase()}
+                </strong>
+
+                <input type="number"
+                       id="rl-limit-${axis}-min"
+                       step="0.1"
+                       placeholder="MIN">
+
+                <input type="number"
+                       id="rl-limit-${axis}-max"
+                       step="0.1"
+                       placeholder="MAX">
+
+            </div>
+        `).join("")}
+
+        <div class="rl-current" id="rl-limit-current">
+            Waiting for TCP feedback...
+        </div>
+
+        <div class="actions">
+            <button class="primary" id="rl-limit-save">
+                SAVE MOTION LIMIT
+            </button>
+
+            <button id="rl-limit-load">
+                RELOAD LIMITS
+            </button>
+        </div>
+
+        <p id="rl-limit-status"></p>
+
+        <p class="muted">
+            Software limits apply to manual motion.
+            FK-derived TCP only. Not collision detection.
+        </p>
+    `;
+
+    anchor.after(panel);
+
+    let config = null;
+    let pending = false;
+
+    function status(message,bad=false){
+
+        const el = get("rl-limit-status");
+
+        el.textContent = message;
+
+        el.style.color =
+            bad ? "#ff8585" : "#76e7c4";
+    }
+
+    function showConfig(){
+
+        get("rl-limit-enable").checked =
+            Boolean(config.enabled);
+
+        for(const axis of ["x","y","z"]){
+
+            const range = config.limits?.[axis];
+
+            get("rl-limit-"+axis+"-min").value =
+                range?.[0] ?? "";
+
+            get("rl-limit-"+axis+"-max").value =
+                range?.[1] ?? "";
+        }
+    }
+
+    function checkPoint(p){
+
+        if(!config?.enabled) return;
+
+        for(const axis of ["x","y","z"]){
+
+            const [lo,hi] = config.limits[axis];
+
+            if(
+                !Number.isFinite(p[axis]) ||
+                p[axis] < lo ||
+                p[axis] > hi
+            ){
+                throw Error(
+                    "XYZ LIMIT: "+axis.toUpperCase()+
+                    " = "+Number(p[axis]).toFixed(2)+
+                    " mm outside "+lo+".."+hi
+                );
+            }
+        }
+    }
+
+    window.rlXYZCheck = checkPoint;
+
+    window.rlXYZModelCheck = function(){
+
+        if(!config?.enabled || mode !== "real") return;
+
+        const g = config.geometry;
+
+        const keys = [
+            "h","l1","l2","l3",
+            "homeAngles","dirs","ticksPerDegree"
+        ];
+
+        if(
+            !geom.realCalibrated ||
+            keys.some(
+                k=>JSON.stringify(geom[k]) !==
+                   JSON.stringify(g[k])
+            )
+        ){
+            throw Error(
+                "Geometry changed. Save Motion Limit again."
+            );
+        }
+    };
+
+    window.rlXYZPath = function(previous,targets){
+
+        if(!config?.enabled) return;
+
+        window.rlXYZModelCheck();
+
+        const ticks = [...previous];
+
+        const verify = () => {
+
+            const q = ticks.map((t,i)=>
+                geom.homeAngles[i]+
+                (t-servo(IDS[i]).zero)*
+                geom.dirs[i]/
+                geom.ticksPerDegree[i]
+            );
+
+            checkPoint(fk(q));
+        };
+
+        verify();
+
+        for(let i=0;i<4;i++){
+
+            const start = ticks[i];
+            const target = targets[i];
+
+            const direction =
+                target >= start ? 1 : -1;
+
+            for(
+                let t=start;
+                direction>0 ? t<=target : t>=target;
+                t+=direction
+            ){
+                ticks[i]=t;
+                verify();
+            }
+        }
+    };
+
+    async function load(){
+
+        if(pending) return;
+
+        pending = true;
+
+        try{
+
+            const r = await fetch(
+                "/api/motion-limits",
+                {cache:"no-store"}
+            );
+
+            const d = await r.json();
+
+            if(!r.ok || !d.ok){
+                throw Error(d.error || "Load failed");
+            }
+
+            config = d.config;
+
+            showConfig();
+
+            status(
+                config.enabled
+                    ? "XYZ Motion Limit ACTIVE"
+                    : "XYZ Motion Limit DISABLED"
+            );
+
+        }catch(e){
+
+            status(e.message,true);
+
+        }finally{
+
+            pending = false;
+        }
+    }
+
+    get("rl-limit-save").onclick = async ()=>{
+
+        if(pending || working || live.busy ||
+           live.emotion_armed) return;
+
+        pending = true;
+
+        try{
+
+            const enabled =
+                get("rl-limit-enable").checked;
+
+            const limits = {};
+
+            if(enabled){
+
+                if(!geom.realCalibrated){
+                    throw Error(
+                        "Save Geometry and Calibration first"
+                    );
+                }
+
+                for(const axis of ["x","y","z"]){
+
+                    const lo = get("rl-limit-"+axis+"-min").value;
+                    const hi = get("rl-limit-"+axis+"-max").value;
+
+                    if(
+                        lo.trim()==="" ||
+                        hi.trim()==="" ||
+                        !Number.isFinite(Number(lo)) ||
+                        !Number.isFinite(Number(hi)) ||
+                        Number(lo)>=Number(hi)
+                    ){
+                        throw Error(
+                            axis.toUpperCase()+": invalid Min/Max"
+                        );
+                    }
+
+                    limits[axis]=[Number(lo),Number(hi)];
+                }
+            }
+
+            const d = await post(
+                "/api/motion-limits",
+                {
+                    enabled,
+                    limits,
+                    geometry:geom
+                }
+            );
+
+            config = d.config;
+
+            showConfig();
+
+            status(
+                enabled
+                    ? "Motion limits saved and enabled"
+                    : "Motion limits disabled"
+            );
+
+        }catch(e){
+
+            status(e.message,true);
+
+        }finally{
+
+            pending = false;
+        }
+    };
+
+    get("rl-limit-load").onclick = load;
+
+    function update(){
+
+        get("rl-limit-save").disabled = Boolean(
+            pending ||
+            working ||
+            live.busy ||
+            live.emotion_armed
+        );
+
+        const el = get("rl-limit-current");
+
+        try{
+
+            const q = currentQ();
+
+            if(!q || (mode==="real"&&!geom.realCalibrated)){
+                throw Error("TCP feedback unavailable");
+            }
+
+            const p = fk(q);
+
+            let text =
+                "X: "+p.x.toFixed(2)+" mm | "+
+                "Y: "+p.y.toFixed(2)+" mm | "+
+                "Z: "+p.z.toFixed(2)+" mm";
+
+            if(config?.enabled){
+
+                try{
+
+                    window.rlXYZModelCheck();
+                    checkPoint(p);
+
+                    text += " | INSIDE LIMIT";
+
+                    el.style.color="#76e7c4";
+
+                }catch(e){
+
+                    text += " | "+e.message;
+
+                    el.style.color="#ff8585";
+                }
+
+            }else{
+
+                text += " | LIMIT DISABLED";
+
+                el.style.color="#b8cfe0";
+            }
+
+            el.textContent=text;
+
+        }catch(e){
+
+            el.textContent=e.message;
+        }
+    }
+
+    load();
+    setInterval(update,500);
+
+})();
+</script>
+
+
+
+<script>
+// RL_AUTO_XYZ_FROM_FK_V1
+
+(() => {
+
+    const limits = [
+        [50, 430],
+        [150, 650],
+        [0, 700],
+        [0, 800]
+    ];
+
+    function install() {
+
+        const heading = [...document.querySelectorAll(
+            "h1,h2,h3,h4"
+        )].find(e =>
+            e.textContent.trim() === "Cartesian Motion Limit"
+        );
+
+        if (!heading) return;
+
+        let panel = heading.parentElement;
+
+        while (panel && panel !== document.body) {
+            const mins = panel.querySelectorAll(
+                'input[placeholder="MIN" i]'
+            );
+            const maxs = panel.querySelectorAll(
+                'input[placeholder="MAX" i]'
+            );
+
+            if (mins.length === 3 && maxs.length === 3)
+                break;
+
+            panel = panel.parentElement;
+        }
+
+        if (!panel || panel === document.body) {
+            console.error("XYZ input fields not found");
+            return;
+        }
+
+        const box = document.createElement("div");
+
+        box.style.cssText = `
+            padding:18px;
+            margin:15px 0;
+            background:#0a1e30;
+            border:1px solid #30516d;
+            border-radius:12px;
+        `;
+
+        box.innerHTML = `
+            <h3>Automatic Joint Workspace</h3>
+
+            <p>Servo 1: 50 - 430 ticks</p>
+            <p>Servo 2: 150 - 650 ticks</p>
+            <p>Servo 3: 0 - 700 ticks</p>
+            <p>Servo 4: 0 - 800 ticks</p>
+
+            <button type="button"
+                id="rl-calculate-xyz"
+                style="background:#79e8c7;
+                       color:#09242b;
+                       font-weight:bold;
+                       padding:14px;
+                       border-radius:8px;
+                       width:100%;">
+                CALCULATE XYZ FROM FK
+            </button>
+
+            <p id="rl-workspace-status">
+                Ready to calculate
+            </p>
+
+            <div id="rl-workspace-plots"
+                 style="display:none;">
+                <h3>Workspace Preview - Side View</h3>
+                <canvas id="rl-ws-side"></canvas>
+
+                <h3>Workspace Preview - Top View</h3>
+                <canvas id="rl-ws-top"></canvas>
+
+                <h3>Workspace Preview - 3D Projection</h3>
+                <canvas id="rl-ws-3d"></canvas>
+            </div>
+        `;
+
+        heading.insertAdjacentElement("afterend", box);
+
+        const status = box.querySelector(
+            "#rl-workspace-status"
+        );
+
+        function drawPlot(id, points, project, labels) {
+
+            const canvas = document.getElementById(id);
+            canvas.width = 700;
+            canvas.height = 360;
+            canvas.style.width = "100%";
+            canvas.style.height = "320px";
+
+            const ctx = canvas.getContext("2d");
+
+            const w = canvas.width;
+            const h = canvas.height;
+            const pad = 45;
+
+            ctx.fillStyle = "#081b2c";
+            ctx.fillRect(0, 0, w, h);
+
+            const pts = points.map(project);
+
+            let xmin = 0, xmax = 0;
+            let ymin = 0, ymax = 0;
+
+            for (const [x,y] of pts) {
+                xmin = Math.min(xmin,x);
+                xmax = Math.max(xmax,x);
+                ymin = Math.min(ymin,y);
+                ymax = Math.max(ymax,y);
+            }
+
+            const scale = Math.min(
+                (w-2*pad)/Math.max(1,xmax-xmin),
+                (h-2*pad)/Math.max(1,ymax-ymin)
+            );
+
+            const ox = w/2 - (xmin+xmax)*scale/2;
+            const oy = h/2 + (ymin+ymax)*scale/2;
+
+            ctx.strokeStyle = "#28475b";
+            ctx.lineWidth = 1;
+
+            for (let i=-500; i<=500; i+=25) {
+                ctx.beginPath();
+                ctx.moveTo(ox+i*scale,0);
+                ctx.lineTo(ox+i*scale,h);
+                ctx.stroke();
+
+                ctx.beginPath();
+                ctx.moveTo(0,oy-i*scale);
+                ctx.lineTo(w,oy-i*scale);
+                ctx.stroke();
+            }
+
+            ctx.fillStyle = "rgba(110,232,195,0.25)";
+
+            for (const [x,y] of pts) {
+                ctx.fillRect(
+                    ox+x*scale,
+                    oy-y*scale,
+                    2,2
+                );
+            }
+
+            ctx.strokeStyle = "#a4c0d4";
+            ctx.beginPath();
+            ctx.moveTo(0,oy);
+            ctx.lineTo(w,oy);
+            ctx.moveTo(ox,0);
+            ctx.lineTo(ox,h);
+            ctx.stroke();
+
+            ctx.fillStyle = "#d2e7f5";
+            ctx.font = "14px Arial";
+            ctx.fillText(labels[0], w-115, h-12);
+            ctx.fillText(labels[1], 12, 22);
+        }
+
+        function calculate() {
+
+            try {
+
+                if (
+                    typeof fk !== "function" ||
+                    typeof servo !== "function" ||
+                    typeof realQ !== "function" ||
+                    typeof geom === "undefined"
+                ) {
+                    throw Error(
+                        "Existing FK/calibration functions not found"
+                    );
+                }
+
+                if (geom.realCalibrated === false) {
+                    throw Error(
+                        "Save and verify calibration first"
+                    );
+                }
+
+                const current = realQ();
+
+                if (
+                    !Array.isArray(current) ||
+                    current.length !== 4 ||
+                    !current.every(Number.isFinite)
+                ) {
+                    throw Error(
+                        "Refresh Servo and check saved Zero first"
+                    );
+                }
+
+                const calibration = [];
+                const ranges = [];
+
+                for (let i=0; i<4; i++) {
+
+                    const s = servo(i+1);
+
+                    if (
+                        !s || !s.online ||
+                        !Number.isInteger(s.zero) ||
+                        !Number.isInteger(s.actual) ||
+                        !Number.isInteger(s.min) ||
+                        !Number.isInteger(s.max)
+                    ) {
+                        throw Error(
+                            `Servo ${i+1}: feedback/zero unavailable`
+                        );
+                    }
+
+                    const zeroAngle = geom.homeAngles?.[i];
+                    const tpd = geom.ticksPerDegree?.[i];
+                    const dir = geom.dirs?.[i];
+
+                    if (
+                        !Number.isFinite(zeroAngle) ||
+                        !Number.isFinite(tpd) ||
+                        tpd <= 0 ||
+                        Math.abs(dir) !== 1
+                    ) {
+                        throw Error(
+                            `Servo ${i+1}: calibration unavailable`
+                        );
+                    }
+
+                    const toAngle = ticks =>
+                        zeroAngle +
+                        (ticks-s.zero)*dir/tpd;
+
+                    if (
+                        Math.abs(
+                            toAngle(s.actual)-current[i]
+                        ) > 0.1
+                    ) {
+                        throw Error(
+                            `Servo ${i+1}: FK calibration mismatch`
+                        );
+                    }
+
+                    // Keep margin inside hardware limits.
+                    const lo = Math.max(
+                        limits[i][0], s.min+20
+                    );
+
+                    const hi = Math.min(
+                        limits[i][1], s.max-20
+                    );
+
+                    if (lo >= hi) {
+                        throw Error(
+                            `Servo ${i+1}: invalid joint range`
+                        );
+                    }
+
+                    calibration.push(toAngle);
+                    ranges.push([lo,hi]);
+                }
+
+                const mins = [Infinity,Infinity,Infinity];
+                const maxs = [-Infinity,-Infinity,-Infinity];
+
+                const points = [];
+                const q = [0,0,0,0];
+
+                let count = 0;
+
+                // 17 samples per joint.
+                const N = 16;
+
+                function sample(i) {
+
+                    if (i === 4) {
+
+                        const p = fk(q.slice());
+                        const xyz = [p.x,p.y,p.z];
+
+                        if (!xyz.every(Number.isFinite)) {
+                            throw Error("Invalid FK result");
+                        }
+
+                        xyz.forEach((v,k) => {
+                            mins[k] = Math.min(mins[k],v);
+                            maxs[k] = Math.max(maxs[k],v);
+                        });
+
+                        if (count % 19 === 0) {
+
+                            const yaw = q[0]*Math.PI/180;
+
+                            points.push({
+                                x:p.x,
+                                y:p.y,
+                                z:p.z,
+                                r:p.x*Math.cos(yaw)
+                                  +p.y*Math.sin(yaw)
+                            });
+                        }
+
+                        count++;
+                        return;
+                    }
+
+                    const [lo,hi] = ranges[i];
+
+                    for (let j=0; j<=N; j++) {
+
+                        const ticks = Math.round(
+                            lo+(hi-lo)*j/N
+                        );
+
+                        q[i] = calibration[i](ticks);
+                        sample(i+1);
+                    }
+                }
+
+                sample(0);
+
+                const minFields = panel.querySelectorAll(
+                    'input[placeholder="MIN" i]'
+                );
+
+                const maxFields = panel.querySelectorAll(
+                    'input[placeholder="MAX" i]'
+                );
+
+                if (
+                    minFields.length !== 3 ||
+                    maxFields.length !== 3
+                ) {
+                    throw Error("XYZ fields not found");
+                }
+
+                for (let i=0; i<3; i++) {
+
+                    minFields[i].value =
+                        (Math.floor(mins[i]*10)/10)
+                        .toFixed(1);
+
+                    maxFields[i].value =
+                        (Math.ceil(maxs[i]*10)/10)
+                        .toFixed(1);
+                }
+
+                box.querySelector(
+                    "#rl-workspace-plots"
+                ).style.display = "block";
+
+                drawPlot(
+                    "rl-ws-side",
+                    points,
+                    p => [p.r,p.z],
+                    ["Signed R (mm)","Z (mm)"]
+                );
+
+                drawPlot(
+                    "rl-ws-top",
+                    points,
+                    p => [p.x,p.y],
+                    ["X (mm)","Y (mm)"]
+                );
+
+                drawPlot(
+                    "rl-ws-3d",
+                    points,
+                    p => [
+                        (p.x-p.y)*0.866,
+                        p.z-(p.x+p.y)*0.5
+                    ],
+                    ["Isometric","3D Projection"]
+                );
+
+                status.style.color = "#79e8c7";
+
+                status.textContent =
+                    "SUCCESS: " + count +
+                    " FK samples | Review XYZ limits before saving." +
+                    " | Effective ranges: " +
+                    ranges.map((r,i) =>
+                        "J"+(i+1)+": "+r.join("-")
+                    ).join(" | ");
+
+            } catch (e) {
+
+                status.style.color = "#ff8181";
+                status.textContent = "ERROR: " + e.message;
+            }
+        }
+
+        box.querySelector(
+            "#rl-calculate-xyz"
+        ).addEventListener("click", calculate);
+    }
+
+    if (document.readyState === "loading") {
+        document.addEventListener(
+            "DOMContentLoaded", install
+        );
+    } else {
+        install();
+    }
+
+})();
+</script>
+
+
+<script>
+// RL_IK_LIMIT_INFO_V1
+(() => {
+
+    function norm(s) {
+        return String(s || "").replace(/\s+/g, " ").trim();
+    }
+
+    function findSection(titleText) {
+        const heads = [
+            ...document.querySelectorAll("h1,h2,h3,h4")
+        ];
+
+        const head = heads.find(h =>
+            norm(h.textContent).includes(titleText)
+        );
+
+        if (!head) return null;
+
+        let node = head.parentElement;
+
+        while (node && node !== document.body) {
+            if (node.querySelector("input")) {
+                return node;
+            }
+            node = node.parentElement;
+        }
+
+        return head.parentElement;
+    }
+
+    function parseNumber(el) {
+        if (!el) return NaN;
+        const v = Number(el.value);
+        return Number.isFinite(v) ? v : NaN;
+    }
+
+    function fmt(v) {
+        return Number.isFinite(v) ? v.toFixed(1) : "—";
+    }
+
+    function getMotionLimitRefs() {
+        const panel = findSection("Cartesian Motion Limit");
+        if (!panel) return null;
+
+        const nums = [
+            ...panel.querySelectorAll('input[type="number"]')
+        ].filter(el =>
+            !el.closest("#rl-workspace-plots") &&
+            !el.closest("#ik-limit-box")
+        );
+
+        const cb = panel.querySelector('input[type="checkbox"]');
+
+        if (nums.length < 6) return null;
+
+        // รองรับได้ทั้ง DOM แบบ row-wise และ column-wise
+        const vals = nums.slice(0, 6).map(parseNumber);
+
+        let refs = null;
+
+        const rowwise_ok =
+            vals[0] <= vals[1] &&
+            vals[2] <= vals[3] &&
+            vals[4] <= vals[5];
+
+        const colwise_ok =
+            vals[0] <= vals[3] &&
+            vals[1] <= vals[4] &&
+            vals[2] <= vals[5];
+
+        if (rowwise_ok) {
+            refs = {
+                minX: nums[0], maxX: nums[1],
+                minY: nums[2], maxY: nums[3],
+                minZ: nums[4], maxZ: nums[5],
+                enabled: cb
+            };
+        } else if (colwise_ok) {
+            refs = {
+                minX: nums[0], maxX: nums[3],
+                minY: nums[1], maxY: nums[4],
+                minZ: nums[2], maxZ: nums[5],
+                enabled: cb
+            };
+        } else {
+            refs = {
+                minX: nums[0], maxX: nums[1],
+                minY: nums[2], maxY: nums[3],
+                minZ: nums[4], maxZ: nums[5],
+                enabled: cb
+            };
+        }
+
+        return refs;
+    }
+
+    function getIkRefs() {
+        const x = document.getElementById("ik-x");
+        const y = document.getElementById("ik-y");
+        const z = document.getElementById("ik-z");
+
+        if (!x || !y || !z) return null;
+
+        return { x, y, z };
+    }
+
+    function axisStatus(target, minv, maxv) {
+        if (
+            !Number.isFinite(target) ||
+            !Number.isFinite(minv) ||
+            !Number.isFinite(maxv)
+        ) {
+            return "—";
+        }
+
+        return (target >= minv && target <= maxv)
+            ? "IN LIMIT"
+            : "OUT OF LIMIT";
+    }
+
+    function colorFor(status) {
+        if (status === "IN LIMIT") return "#79e8c7";
+        if (status === "OUT OF LIMIT") return "#ff8181";
+        return "#d6e6f2";
+    }
+
+    function install() {
+        const ikPanel = findSection("Inverse Kinematics");
+        if (!ikPanel) {
+            console.error("IK panel not found");
+            return;
+        }
+
+        const host =
+            ikPanel.querySelector("h2")?.parentElement || ikPanel;
+
+        const box = document.createElement("div");
+        box.id = "ik-limit-box";
+        box.style.cssText = `
+            margin:14px 0 18px 0;
+            padding:14px 16px;
+            background:#0a1e30;
+            border:1px solid #30516d;
+            border-radius:12px;
+        `;
+
+        box.innerHTML = `
+            <div style="font-size:15px;font-weight:700;margin-bottom:10px;">
+                XYZ Motion Limit Reference
+            </div>
+
+            <div style="display:grid;grid-template-columns:repeat(2,minmax(220px,1fr));gap:10px;">
+                <div id="ik-limit-x-row"></div>
+                <div id="ik-limit-y-row"></div>
+                <div id="ik-limit-z-row"></div>
+                <div id="ik-limit-enabled-row"></div>
+            </div>
+
+            <div style="margin-top:12px;font-size:13px;color:#a9c3d8;">
+                แสดงค่าจาก Cartesian Motion Limit ด้านล่าง และเช็กว่า Target X/Y/Z ตอนนี้อยู่ในช่วงหรือไม่
+            </div>
+        `;
+
+        const firstFields =
+            [...ikPanel.querySelectorAll("label.field")][0];
+
+        if (firstFields) {
+            firstFields.parentElement.insertAdjacentElement(
+                "beforebegin",
+                box
+            );
+        } else {
+            host.appendChild(box);
+        }
+
+        function update() {
+            const lim = getMotionLimitRefs();
+            const ik = getIkRefs();
+
+            if (!lim || !ik) return;
+
+            const minX = parseNumber(lim.minX);
+            const maxX = parseNumber(lim.maxX);
+            const minY = parseNumber(lim.minY);
+            const maxY = parseNumber(lim.maxY);
+            const minZ = parseNumber(lim.minZ);
+            const maxZ = parseNumber(lim.maxZ);
+
+            const tx = parseNumber(ik.x);
+            const ty = parseNumber(ik.y);
+            const tz = parseNumber(ik.z);
+
+            const sx = axisStatus(tx, minX, maxX);
+            const sy = axisStatus(ty, minY, maxY);
+            const sz = axisStatus(tz, minZ, maxZ);
+
+            document.getElementById("ik-limit-x-row").innerHTML =
+                `<strong>X</strong>: ${fmt(minX)} → ${fmt(maxX)} mm
+                 <span style="margin-left:8px;color:${colorFor(sx)};">${sx}</span>`;
+
+            document.getElementById("ik-limit-y-row").innerHTML =
+                `<strong>Y</strong>: ${fmt(minY)} → ${fmt(maxY)} mm
+                 <span style="margin-left:8px;color:${colorFor(sy)};">${sy}</span>`;
+
+            document.getElementById("ik-limit-z-row").innerHTML =
+                `<strong>Z</strong>: ${fmt(minZ)} → ${fmt(maxZ)} mm
+                 <span style="margin-left:8px;color:${colorFor(sz)};">${sz}</span>`;
+
+            document.getElementById("ik-limit-enabled-row").innerHTML =
+                `<strong>Motion Limit</strong>: ${
+                    lim.enabled && lim.enabled.checked
+                        ? '<span style="color:#79e8c7;">ENABLED</span>'
+                        : '<span style="color:#ffd27a;">DISABLED</span>'
+                }`;
+        }
+
+        update();
+
+        document.addEventListener("input", update);
+        document.addEventListener("change", update);
+        setInterval(update, 500);
+    }
+
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", install);
+    } else {
+        install();
+    }
+
+})();
+</script>
+
 </body>
 </html>

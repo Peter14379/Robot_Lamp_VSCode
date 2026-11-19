@@ -740,7 +740,12 @@ def background_poll():
 
                 port = None
 
-        time.sleep(2)
+        # RL_ACTUAL_SERIAL_FEEDBACK_V1
+
+        with state_lock:
+            armed = state["emotion_armed"]
+
+        time.sleep(2.0 if armed else 0.5)
 
 # ==========================================
 # REAL SERVO MOVE
@@ -771,6 +776,13 @@ def move_absolute(
         i, target, manual_fk=manual_fk
     )
     before = s["actual"]
+
+    if rl_limit_read()["enabled"]:
+
+        rl_limit_plan(
+            [checked_servo(j)["actual"] for j in IDS],
+            [(i, target)]
+        )
 
     distance = abs(target - before)
 
@@ -1319,8 +1331,17 @@ def home():
 @app.get("/api/status")
 def api_status():
     with state_lock:
+
+        feedback_age = (
+            time.monotonic() - state["position_at"]
+            if state["position_at"] > 0
+            else None
+        )
+
         return jsonify(
             ok=True,
+            feedback_age_s=feedback_age,
+            feedback_source="ESP32_READPOS",
             **{
                 **state,
                 "servos": [
@@ -2116,6 +2137,645 @@ def api_monitor_hormone():
 # ==========================================
 # START FLASK SERVER
 # ==========================================
+
+
+# RL_FK_SAVED_POSITIONS_V1
+
+from uuid import uuid4
+
+POSE_FILE = BASE / "saved_positions.json"
+pose_lock = threading.RLock()
+
+def rl_pose_read():
+    try:
+        poses = json.loads(
+            POSE_FILE.read_text(encoding="utf-8")
+        )
+    except FileNotFoundError:
+        return []
+
+    if not isinstance(poses, list):
+        raise ValueError("Invalid saved positions file")
+
+    for pose in poses:
+        if not isinstance(pose, dict):
+            raise ValueError("Invalid saved position")
+
+        ticks = pose.get("ticks")
+
+        if (
+            not isinstance(pose.get("id"), str)
+            or not isinstance(pose.get("name"), str)
+            or not isinstance(ticks, list)
+            or len(ticks) != 4
+            or not all(
+                type(t) is int and 0 <= t <= 1023
+                for t in ticks
+            )
+        ):
+            raise ValueError("Invalid saved position data")
+
+    return poses
+
+
+def rl_pose_write(poses):
+    temp = POSE_FILE.with_suffix(".json.tmp")
+
+    temp.write_text(
+        json.dumps(
+            poses,
+            indent=2,
+            ensure_ascii=False
+        ),
+        encoding="utf-8"
+    )
+
+    temp.replace(POSE_FILE)
+
+
+@app.get("/api/fk/positions")
+def rl_pose_list():
+    try:
+        with pose_lock:
+            return jsonify(
+                ok=True,
+                poses=rl_pose_read()
+            )
+    except Exception as exc:
+        return jsonify(
+            ok=False,
+            error=str(exc)
+        ), 409
+
+
+@app.post("/api/fk/positions")
+def rl_pose_action():
+
+    data = request.get_json(silent=True)
+
+    if not isinstance(data, dict):
+        return jsonify(
+            ok=False,
+            error="Invalid request"
+        ), 400
+
+    action = data.get("action")
+    pose_id = data.get("id")
+
+    if action not in ("capture", "delete", "move", "speed"):
+        return jsonify(
+            ok=False,
+            error="Unknown action"
+        ), 400
+
+    reserved = False
+
+    try:
+
+        if action in ("delete", "move", "speed"):
+
+            with pose_lock:
+
+                poses = rl_pose_read()
+
+                pose = next(
+                    (
+                        p for p in poses
+                        if p["id"] == pose_id
+                    ),
+                    None
+                )
+
+                if pose is None:
+                    raise ValueError("Position not found")
+
+                if action == "speed":
+
+                    value = data.get("speed")
+
+                    if (
+                        type(value) is not int
+                        or not 40 <= value <= 800
+                    ):
+                        raise ValueError("Speed must be 40..800 RAW")
+
+                    pose["speed"] = value
+
+                    rl_pose_write(poses)
+
+                    return jsonify(
+                        ok=True,
+                        poses=poses
+                    )
+
+                if action == "delete":
+
+                    poses = [
+                        p for p in poses
+                        if p["id"] != pose_id
+                    ]
+
+                    rl_pose_write(poses)
+
+                    return jsonify(
+                        ok=True,
+                        poses=poses
+                    )
+
+        # Reserve hardware for capture or replay.
+
+        with state_lock:
+
+            if state["busy"]:
+                raise RuntimeError("Robot is busy")
+
+            if state["emotion_armed"]:
+                raise RuntimeError(
+                    "DISARM Emotion first"
+                )
+
+            if not SERVO_HARDWARE_ENABLED:
+                raise RuntimeError(
+                    "REAL hardware disabled"
+                )
+
+            state["busy"] = True
+            reserved = True
+
+            if action == "move":
+                cancel_event.clear()
+
+        with serial_lock:
+
+            refresh(force_info=True)
+
+            actual = [
+                checked_servo(i)["actual"]
+                for i in IDS
+            ]
+
+            if action == "capture":
+
+                name = data.get("name", "")
+
+                if not isinstance(name, str):
+                    raise ValueError("Invalid name")
+
+                name = name.strip()
+
+                if len(name) > 80:
+                    raise ValueError("Name too long")
+
+                # Capture only a stationary pose.
+
+                time.sleep(0.4)
+                read_positions()
+
+                ticks = [
+                    checked_servo(i)["actual"]
+                    for i in IDS
+                ]
+
+                if any(
+                    abs(x-y) > 3
+                    for x,y in zip(actual,ticks)
+                ):
+                    raise RuntimeError(
+                        "Robot is moving. Capture again."
+                    )
+
+                with pose_lock:
+
+                    poses = rl_pose_read()
+
+                    if not name:
+                        name = time.strftime(
+                            "Position %Y-%m-%d %H:%M:%S"
+                        )
+
+                    pose = {
+                        "id": uuid4().hex,
+                        "name": name,
+                        "ticks": ticks,
+                        "speed": 80,
+                        "created": time.strftime(
+                            "%Y-%m-%d %H:%M:%S"
+                        )
+                    }
+
+                    poses.append(pose)
+
+                    rl_pose_write(poses)
+
+                return jsonify(
+                    ok=True,
+                    pose=pose,
+                    poses=poses
+                )
+
+            # Validate every destination before moving.
+
+            targets = pose["ticks"]
+
+            for i,target in zip(IDS,targets):
+                checked_servo(i,target)
+
+            speed = pose.get("speed", 80)
+
+            if type(speed) is not int or not 40 <= speed <= 800:
+                raise ValueError("Invalid saved speed")
+
+            step = 250
+
+            # Keep the existing MOVE safety rules.
+            # Move joints sequentially.
+
+            plan = []
+
+            for i,start,target in zip(
+                IDS,actual,targets
+            ):
+
+                delta = target - start
+
+                if delta == 0:
+                    continue
+
+                count = (
+                    abs(delta) + step - 1
+                ) // step
+
+                for k in range(1,count+1):
+
+                    point = round(
+                        start + delta*k/count
+                    )
+
+                    checked_servo(i,point)
+
+                    plan.append((i,point))
+
+            rl_limit_plan(actual, plan)
+
+            for i,target in plan:
+
+                if cancel_event.is_set():
+                    raise RuntimeError(
+                        "Replay cancelled"
+                    )
+
+                move_absolute(
+                    i,
+                    target,
+                    speed,
+                    manual_fk=False
+                )
+
+            if cancel_event.is_set():
+                raise RuntimeError(
+                    "Replay cancelled"
+                )
+
+            time.sleep(0.5)
+            read_positions()
+
+            actual = [
+                checked_servo(i)["actual"]
+                for i in IDS
+            ]
+
+            errors = [
+                abs(x-y)
+                for x,y in zip(actual,targets)
+            ]
+
+            if max(errors) > TOLERANCE:
+                raise RuntimeError(
+                    f"Position not reached. "
+                    f"Actual={actual}, errors={errors}"
+                )
+
+            return jsonify(
+                ok=True,
+                name=pose["name"],
+                targets=targets,
+                actual=actual,
+                errors=errors,
+                tolerance=TOLERANCE
+            )
+
+    except Exception as exc:
+
+        return jsonify(
+            ok=False,
+            error=str(exc)
+        ), 409
+
+    finally:
+
+        if reserved:
+
+            with state_lock:
+                state["busy"] = False
+
+# END RL_FK_SAVED_POSITIONS_V1
+
+
+
+# RL_SAVED_SPEED_XYZ_LIMIT_V1
+
+import math
+
+RL_LIMIT_FILE = BASE / "motion_limits.json"
+
+
+def rl_limit_read():
+
+    if not RL_LIMIT_FILE.exists():
+        return {"enabled": False}
+
+    result = json.loads(
+        RL_LIMIT_FILE.read_text(encoding="utf-8")
+    )
+
+    if (
+        not isinstance(result, dict)
+        or type(result.get("enabled")) is not bool
+    ):
+        raise ValueError("Invalid motion limit configuration")
+
+    return result
+
+
+def rl_limit_number(value):
+
+    if (
+        type(value) not in (int, float)
+        or not math.isfinite(value)
+    ):
+        raise ValueError("Invalid numeric value")
+
+    return float(value)
+
+
+def rl_limit_fk(ticks, config):
+
+    g = config["geometry"]
+
+    q = [
+        math.radians(
+            g["homeAngles"][i] +
+            (ticks[i] - g["zeros"][i]) *
+            g["dirs"][i] /
+            g["ticksPerDegree"][i]
+        )
+        for i in range(4)
+    ]
+
+    j1, j2, j3, j4 = q
+
+    phi = j2 + j3 + j4
+
+    r = (
+        g["l1"] * math.cos(j2) +
+        g["l2"] * math.cos(j2+j3) +
+        g["l3"] * math.cos(phi)
+    )
+
+    return {
+        "x": r * math.cos(j1),
+        "y": r * math.sin(j1),
+        "z": (
+            g["h"] +
+            g["l1"] * math.sin(j2) +
+            g["l2"] * math.sin(j2+j3) +
+            g["l3"] * math.sin(phi)
+        )
+    }
+
+
+def rl_limit_check(ticks, config):
+
+    point = rl_limit_fk(ticks, config)
+
+    for axis in ("x", "y", "z"):
+
+        lo, hi = config["limits"][axis]
+
+        value = point[axis]
+
+        if not lo <= value <= hi:
+
+            raise ValueError(
+                f"XYZ LIMIT: {axis.upper()}="
+                f"{value:.2f} mm outside "
+                f"{lo}..{hi} mm"
+            )
+
+    return point
+
+
+def rl_limit_plan(actual, plan):
+
+    config = rl_limit_read()
+
+    if not config["enabled"]:
+        return
+
+    feedback = [
+        checked_servo(i)
+        for i in IDS
+    ]
+
+    if [
+        s["zero"] for s in feedback
+    ] != config["geometry"]["zeros"]:
+
+        raise ValueError(
+            "Software zero changed. Save XYZ limits again."
+        )
+
+    ticks = list(actual)
+
+    rl_limit_check(ticks, config)
+
+    # Sample each sequential joint movement
+    # at one-tick intervals.
+
+    for sid, target in plan:
+
+        index = IDS.index(sid)
+
+        start = ticks[index]
+
+        direction = 1 if target >= start else -1
+
+        for value in range(
+            start,
+            target + direction,
+            direction
+        ):
+
+            ticks[index] = value
+
+            rl_limit_check(ticks, config)
+
+
+@app.get("/api/motion-limits")
+def rl_limit_get():
+
+    try:
+        return jsonify(
+            ok=True,
+            config=rl_limit_read()
+        )
+
+    except Exception as exc:
+        return jsonify(
+            ok=False,
+            error=str(exc)
+        ), 409
+
+
+@app.post("/api/motion-limits")
+def rl_limit_save():
+
+    try:
+
+        data = request.get_json(silent=True)
+
+        if not isinstance(data, dict):
+            raise ValueError("Invalid request")
+
+        if type(data.get("enabled")) is not bool:
+            raise ValueError("Invalid enabled state")
+
+        with state_lock:
+
+            if state["busy"] or state["emotion_armed"]:
+                raise RuntimeError(
+                    "Stop movement and DISARM first"
+                )
+
+            config = rl_limit_read()
+
+            if not data["enabled"]:
+
+                config["enabled"] = False
+
+            else:
+
+                incoming = data["geometry"]
+
+                if incoming.get("realCalibrated") is not True:
+                    raise ValueError("Calibration required")
+
+                g = {
+                    k: rl_limit_number(incoming[k])
+                    for k in ("h","l1","l2","l3")
+                }
+
+                if (
+                    g["h"] < 0
+                    or g["l1"] <= 0
+                    or g["l2"] <= 0
+                    or g["l3"] < 0
+                ):
+                    raise ValueError("Invalid geometry")
+
+                for key in (
+                    "homeAngles",
+                    "dirs",
+                    "ticksPerDegree"
+                ):
+
+                    values = incoming[key]
+
+                    if len(values) != 4:
+                        raise ValueError("Invalid calibration")
+
+                    g[key] = [
+                        rl_limit_number(v)
+                        for v in values
+                    ]
+
+                if any(
+                    v not in (-1,1)
+                    for v in g["dirs"]
+                ):
+                    raise ValueError("Invalid joint direction")
+
+                if any(
+                    v <= 0
+                    for v in g["ticksPerDegree"]
+                ):
+                    raise ValueError("Invalid ticks/degree")
+
+                feedback = [
+                    checked_servo(i)
+                    for i in IDS
+                ]
+
+                g["zeros"] = [
+                    s["zero"] for s in feedback
+                ]
+
+                if not all(
+                    type(z) is int
+                    for z in g["zeros"]
+                ):
+                    raise ValueError("Invalid software zero")
+
+                limits = {}
+
+                for axis in ("x","y","z"):
+
+                    lo, hi = [
+                        rl_limit_number(v)
+                        for v in data["limits"][axis]
+                    ]
+
+                    if lo >= hi:
+                        raise ValueError(
+                            axis.upper() + ": MIN must be below MAX"
+                        )
+
+                    limits[axis] = [lo,hi]
+
+                config = {
+                    "enabled": True,
+                    "limits": limits,
+                    "geometry": g
+                }
+
+                # Do not activate a boundary that
+                # excludes the current robot pose.
+
+                rl_limit_check(
+                    [s["actual"] for s in feedback],
+                    config
+                )
+
+            temp = RL_LIMIT_FILE.with_suffix(".json.tmp")
+
+            temp.write_text(
+                json.dumps(config, indent=2),
+                encoding="utf-8"
+            )
+
+            temp.replace(RL_LIMIT_FILE)
+
+        return jsonify(ok=True, config=config)
+
+    except Exception as exc:
+
+        return jsonify(
+            ok=False,
+            error=str(exc)
+        ), 409
+
+# END RL_SAVED_SPEED_XYZ_LIMIT_V1
+
 
 if __name__ == "__main__":
     load_zeros()

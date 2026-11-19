@@ -770,8 +770,19 @@ function main(){
             gizmo.visible=false;
             gizmo.enabled=false;
 
+            // RL_ACTUAL_SERIAL_FEEDBACK_V1
+
             get("rl-workspace-q").textContent=
                 "Joint feedback unavailable";
+
+            get("rl-workspace-pos").textContent=
+                "TCP: -- (not ready)";
+
+            realEnable.checked=false;
+            realEnable.disabled=true;
+
+            ghost.visible=false;
+            marker.visible=false;
 
             return;
         }
@@ -803,7 +814,13 @@ function main(){
         get("rl-workspace-pos").textContent=
             "TCP: X "+p.x.toFixed(2)+
             " | Y "+p.y.toFixed(2)+
-            " | Z "+p.z.toFixed(2)+" mm";
+            " | Z "+p.z.toFixed(2)+" mm" +
+            (
+                mode==="real"
+                    ? " | LIVE SERIAL | Age: "+
+                      live.feedback_age_s.toFixed(2)+" s"
+                    : " | SIMULATION"
+            );
 
         realEnable.disabled=
             mode!=="real" ||
@@ -871,10 +888,13 @@ function main(){
 
             const a=drag.axis.toLowerCase();
 
-            drag.delta=limit(
-                handle.position[a]-drag.position[a],
-                MAX_MM
-            );
+            
+            // RL_FREE_TCP_DRAG_V1
+            // Allow continuous Cartesian dragging.
+            drag.delta =
+                handle.position[a] -
+                drag.position[a];
+
 
             const target=drag.position.clone();
 
