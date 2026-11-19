@@ -788,7 +788,9 @@ def move_absolute(
 
     max_delta = (
         FK_MANUAL_MAX_DELTA
-        if manual_fk else DIRECT_MOVE_MAX_DELTA
+        if manual_fk else (
+            600 if i == 2 else DIRECT_MOVE_MAX_DELTA
+        )
     )
 
     if distance > max_delta:

@@ -162,7 +162,125 @@ function main(){
         b=>b.type="button"
     );
 
+
+    // RL_3D_ROBOT_SPEED_V1
+
+    const rawSelect = get("ik-raw-speed");
+    const rawField = rawSelect.closest("label");
+    const tcpField = get("ik-speed").closest("label");
+
+    // Hide the planning speed in REAL mode.
+    // Preserve its actual value for the IK planner.
+
+    tcpField.id = "rl-tcp-planning-speed";
+
+    const speedCSS = document.createElement("style");
+
+    speedCSS.textContent = `
+        body.real #rl-tcp-planning-speed {
+            display: none !important;
+        }
+    `;
+
+    document.head.appendChild(speedCSS);
+
+    // Move existing speed control into 3D workspace.
+
+    const speedBox = document.createElement("div");
+
+    speedBox.style.cssText =
+        "padding:16px;margin:12px 0;"+
+        "background:#081b2e;"+
+        "border:1px solid #355570;"+
+        "border-radius:12px";
+
+    speedBox.innerHTML = `
+        <h3 style="color:#79e8c7">
+            REAL Robot Speed
+        </h3>
+
+        <div id="rl-3d-speed-value"
+             style="font-size:30px;
+                    font-weight:bold;
+                    text-align:center;
+                    color:#79e8c7;
+                    margin:12px 0">
+            --
+        </div>
+
+        <input type="range"
+               id="rl-3d-speed-slider"
+               min="40"
+               max="800"
+               step="10"
+               value="80"
+               style="width:100%">
+
+        <div style="display:flex;
+                    justify-content:space-between">
+            <span>40 RAW</span>
+            <span>800 RAW</span>
+        </div>
+
+        <p style="color:#a5bcd0">
+            TCP XYZ - REAL motor command speed
+        </p>
+    `;
+
+    get("rl-workspace-stage").before(speedBox);
+
+    // Keep the existing select for IK calculations.
+
+    speedBox.appendChild(rawField);
+    rawField.style.display = "none";
+
+    const slider = get("rl-3d-speed-slider");
+    const speedValue = get("rl-3d-speed-value");
+
+    function applyWorkspaceSpeed(){
+
+        const speed = Number(slider.value);
+
+        if(!Number.isInteger(speed) ||
+            speed<40 || speed>800){
+
+            return;
+        }
+
+        // Support every slider value.
+
+        if(![...rawSelect.options].some(
+            option=>Number(option.value)===speed
+        )){
+
+            rawSelect.add(
+                new Option(
+                    speed+" RAW",
+                    String(speed)
+                )
+            );
+        }
+
+        rawSelect.value = String(speed);
+        speedValue.textContent = speed+" RAW";
+
+        rawSelect.dispatchEvent(
+            new Event("change",{bubbles:true})
+        );
+    }
+
+    // Start with a low test speed.
+
+    slider.value = "80";
+
+    slider.addEventListener(
+        "input",applyWorkspaceSpeed
+    );
+
+    applyWorkspaceSpeed();
+
     const stage = get("rl-workspace-stage");
+
     const realEnable = get("rl-workspace-real");
 
     function status(text,bad=false){

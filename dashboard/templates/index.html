@@ -845,17 +845,17 @@ body.sim .real-only {
             </p>
 
             <div class="fields">
-                <label class="field">
+                <label class="field" style="display:none">
                     <span>Target X (mm)</span>
                     <input type="number" id="ik-x">
                 </label>
 
-                <label class="field">
+                <label class="field" style="display:none">
                     <span>Target Y (mm)</span>
                     <input type="number" id="ik-y">
                 </label>
 
-                <label class="field">
+                <label class="field" style="display:none">
                     <span>Target Z (mm)</span>
                     <input type="number" id="ik-z">
                 </label>
@@ -889,6 +889,31 @@ body.sim .real-only {
                     >
                 </label>
 
+                <!-- RL_IK_INDEPENDENT_SPEED_V1 -->
+
+                <label class="field">
+                    <span>IK Servo Speed (RAW)</span>
+
+                    <select id="ik-raw-speed">
+                        <option value="0">
+                            Use saved Servo speeds
+                        </option>
+                        <option value="40">40 RAW</option>
+                        <option value="80">80 RAW</option>
+                        <option value="100">100 RAW</option>
+                        <option value="150">150 RAW</option>
+                        <option value="200">200 RAW</option>
+                        <option value="250">250 RAW</option>
+                        <option value="300">300 RAW</option>
+                        <option value="400">400 RAW</option>
+                        <option value="500">500 RAW</option>
+                        <option value="600">600 RAW</option>
+                        <option value="700">700 RAW</option>
+                        <option value="800">800 RAW</option>
+                    </select>
+
+                </label>
+
                 <label class="field">
                     <span>Elbow</span>
 
@@ -905,8 +930,10 @@ body.sim .real-only {
             </div>
 
             <p class="muted">
-                REAL uses the per-servo RAW settings. The TCP speed is a requested
-                path speed; actual speed depends on servo calibration.
+                TCP Speed controls path planning.
+                IK Servo Speed controls actual RAW motor commands.
+                Use saved Servo speeds to keep individual motor settings.
+                Actual TCP speed depends on servo calibration.
             </p>
 
             <div class="card" style="margin-top:14px">
@@ -3097,11 +3124,17 @@ async function moveReal(
             );
         }
 
+        // RL_SERVO2_MOVE_600_V1
+
+        const maxDelta = manualFK
+            ? 800
+            : (Number(id) === 2 ? 600 : 300);
+
         if (
-            Math.abs(target - s.actual) > (manualFK ? 800 : 300)
+            Math.abs(target - s.actual) > maxDelta
         ) {
             throw Error(
-                `MOVE limited to ${manualFK ? 800 : 300} ticks from Actual`
+                `Servo ${id}: MOVE limited to ${maxDelta} ticks from Actual`
             );
         }
 
@@ -3209,10 +3242,15 @@ async function goZeroAllReal() {
                 s.zero - s.actual
             );
 
-            if (distance > HOME_MAX_DELTA) {
+            const homeMaxDelta =
+                Number(id) === 2
+                    ? 600
+                    : HOME_MAX_DELTA;
+
+            if (distance > homeMaxDelta) {
                 throw Error(
                     `Servo ${id}: ${distance} ticks ` +
-                    "exceeds 500"
+                    `exceeds ${homeMaxDelta}`
                 );
             }
 
@@ -4414,7 +4452,17 @@ function realTicksForQ(q, previousTicks = null) {
 
     return IDS.map((id, i) => {
         const s = servo(id);
-        const speed = number("real-speed-" + id);
+        
+        const ikRawSpeed = Number(
+            document.getElementById(
+                "ik-raw-speed"
+            ).value
+        );
+
+        const speed = ikRawSpeed === 0
+            ? number("real-speed-" + id)
+            : ikRawSpeed;
+
 
         if (
             !s ||
@@ -6890,6 +6938,2179 @@ rlInitEmotionSpeedEditor();
 </script>
 
 
+
+<script>
+// RL_FULL_MATH_FORMULAS_V5
+
+(() => {
+
+    const formulas = {"mp-formula1": "\nθᵢ = Homeᵢ + [[(Ticksᵢ − Zeroᵢ) × Dirᵢ|TPDᵢ]]\n\nDirᵢ ∈ {−1, +1}\n\nθᵢ : degree\nTPDᵢ : ticks/degree\n\n\nConfiguration Space:\n\nq = [θ₁, θ₂, θ₃, θ₄]\n\nθᵢ,min ≤ θᵢ ≤ θᵢ,max\n\nθᵢ(k) = θᵢ,min\n        + [[k|8]](θᵢ,max − θᵢ,min)\n\nk = 0, 1, ..., 8\n\nTotal samples = 9⁴ = 6561\n\nφ = θ₂ + θ₃ + θ₄\n\nr = L₁ cos(θ₂)\n    + L₂ cos(θ₂ + θ₃)\n    + L₃ cos(θ₂ + θ₃ + θ₄)\n\nX = r cos(θ₁)\n\nY = r sin(θ₁)\n\nZ = H + L₁ sin(θ₂)\n      + L₂ sin(θ₂ + θ₃)\n      + L₃ sin(θ₂ + θ₃ + θ₄)\n\nTCP = [X, Y, Z]\n", "mp-formula2": "\nφ = θ₂ + θ₃ + θ₄\n\nr = L₁ cos(θ₂)\n    + L₂ cos(θ₂ + θ₃)\n    + L₃ cos(θ₂ + θ₃ + θ₄)\n\nX = r cos(θ₁)\n\nY = r sin(θ₁)\n\nZ = H + L₁ sin(θ₂)\n      + L₂ sin(θ₂ + θ₃)\n      + L₃ sin(θ₂ + θ₃ + θ₄)\n\nTCP = [X, Y, Z]\n", "mp-formula3": "\nR = √(X² + Y²)\n\nu = R − L₃ cos(φ)\n\nv = Z − H − L₃ sin(φ)\n\nD = [[u² + v² − L₁² − L₂²|2L₁L₂]]\n\nGeometric condition:\n\n|D| ≤ 1\n\nJoint condition:\n\nθᵢ,min ≤ θᵢ ≤ θᵢ,max\n\nCombined IK index ≥ 0.02\n", "mp-formula4": "\nΔX = Xend − Xstart\n\nΔY = Yend − Ystart\n\nΔZ = Zend − Zstart\n\nd = √(ΔX² + ΔY² + ΔZ²)\n\n\nt = [[i|N]]\n\nPᵢ = Pstart + t(Pend − Pstart)\n\nXᵢ = Xstart + t(Xend − Xstart)\n\nYᵢ = Ystart + t(Yend − Ystart)\n\nZᵢ = Zstart + t(Zend − Zstart)\n\nφᵢ = φstart + t(φend − φstart)\n\n0 ≤ t ≤ 1\n\nt is a path ratio, not seconds.\n", "mp-formula5": "\nΔX = Xend − Xstart\n\nΔY = Yend − Ystart\n\nΔZ = Zend − Zstart\n\nd = √(ΔX² + ΔY² + ΔZ²)\n\n\nREAL Motion Planning:\n\nSmax = clamp(Vtcp × 0.25, 2, 8)\n\nN = max(1, ceil(d / Smax))\n\nSIM Motion Planning:\n\nN = max(1, ceil(d/5),\n        ceil(|Δφ|/3))\n\nTotal waypoints = N + 1\n\nΔs = [[d|N]]\n\nTideal = [[d|Vtcp]]\n\nVtcp : requested TCP speed (mm/s)\nTideal : theoretical duration (s)\n", "mp-formula6": "\nR = √(X² + Y²)\n\nu = R − L₃ cos(φ)\n\nv = Z − H − L₃ sin(φ)\n\nD = [[u² + v² − L₁² − L₂²|2L₁L₂]]\n\nGeometric condition:\n\n|D| ≤ 1\n\nJoint condition:\n\nθᵢ,min ≤ θᵢ ≤ θᵢ,max\n\nCombined IK index ≥ 0.02\n\n\nθ₁ = atan2(Y, X)\n\nθ₃ = +acos(D)    Elbow up\n\nθ₃ = −acos(D)    Elbow down\n\nθ₂ = atan2(v, u)\n     − atan2(L₂ sin(θ₃),\n              L₁ + L₂ cos(θ₃))\n\nθ₄ = φ − θ₂ − θ₃\n\nq = [θ₁, θ₂, θ₃, θ₄]\n\nPosition residual:\n\ne = √((XFK − Xt)²\n    + (YFK − Yt)²\n    + (ZFK − Zt)²)\n", "mp-formula7": "\nTicksᵢ,target = round(\n    Zeroᵢ + [[(θᵢ − Homeᵢ) × TPDᵢ|Dirᵢ]]\n)\n\nθᵢ : calculated joint angle\nZeroᵢ : saved reference ticks\nHomeᵢ : reference joint angle\nTPDᵢ : ticks per degree\nDirᵢ : rotation direction\n\nVelocity RAW is a separate setting.\n", "mp-dh-equation": "\nStandard DH Parameters:\n\n       a       α       d       θ\nJ1     0       90°     H       θ₁\nJ2     L₁      0°      0       θ₂\nJ3     L₂      0°      0       θ₃\nJ4     L₃      0°      0       θ₄\n\na : Link length\nα : Link twist\nd : Link offset\nθ : Joint angle\n", "mp-transform-equation": "\nAi = Rz(θ) Tz(d) Tx(a) Rx(α)\n\n          ┌                         ┐\n          │ cθ  −sθcα   sθsα   acθ │\nAi =      │ sθ   cθcα  −cθsα   asθ │\n          │ 0      sα     cα     d │\n          │ 0       0      0     1 │\n          └                         ┘\n\ncθ = cos(θ)\nsθ = sin(θ)\ncα = cos(α)\nsα = sin(α)\n\nT04 = A1 × A2 × A3 × A4\n\n      ┌                 ┐\n      │ r11 r12 r13  X │\nT04 = │ r21 r22 r23  Y │\n      │ r31 r32 r33  Z │\n      │  0   0   0   1 │\n      └                 ┘\n", "mp-jacobian-equation": "\nGeometric Jacobian:\n\nJvᵢ = zᵢ₋₁ × (pTCP − oᵢ₋₁)\n\nJωᵢ = zᵢ₋₁\n\nJ = [Jv ; Jω]\n\nJ has dimensions 6 × 4.\n\nTask Jacobian:\n\n        ┌                         ┐\n        │ Jx1  Jx2  Jx3  Jx4     │\nJtask = │ Jy1  Jy2  Jy3  Jy4     │\n        │ Jz1  Jz2  Jz3  Jz4     │\n        │  0    1    1    1      │\n        └                         ┘\n\nẊ = Jtask q̇\n\nq̇ : joint velocity in rad/s\n", "mp-singularity-equation": "\nReach = max(1, L₁ + L₂ + L₃)\n\nJn = [[Jv|Reach]]\n\nC₁, C₂, C₃, C₄ = columns of Jn\n\nm₁₂₃ = det[C₁ C₂ C₃]\nm₁₂₄ = det[C₁ C₂ C₄]\nm₁₃₄ = det[C₁ C₃ C₄]\nm₂₃₄ = det[C₂ C₃ C₄]\n\nPosition index:\n\nSp = clamp(\n    √(m₁₂₃² + m₁₂₄² + m₁₃₄² + m₂₃₄²),\n    0, 1\n)\n\nTask index:\n\nSt = clamp(|m₁₂₃ − m₁₂₄ + m₁₃₄|, 0, 1)\n\nLegacy finite-difference Jacobian:\n\nδ = 0.1 × π/180 rad\n\nJi = [[FK(q + 0.1°eᵢ) − FK(q)|δ]]\n\nUse position columns J1, J2, J3.\n\nSl = clamp([[abs(det(Jfd))|Reach³]], 0, 1)\n\nCombined IK safety index:\n\nS = min(Sl, St)\n\nIf FK/DH residual > 0.001 mm:\nS = 0\n\nNear singularity: S < 0.02\n\nclamp(x,a,b) = min(max(x,a),b)\n\nS is dimensionless.\n", "mp-velocity-equation": "\nΔX = Xend − Xstart\n\nΔY = Yend − Ystart\n\nΔZ = Zend − Zstart\n\nd = √(ΔX² + ΔY² + ΔZ²)\n\n\nT = [[d|Vtcp]]\n\nVx = [[ΔX|T]]\n\nVy = [[ΔY|T]]\n\nVz = [[ΔZ|T]]\n\nφ̇ = [[(φend − φstart) × π/180|T]]\n\nẊ = [Vx, Vy, Vz, φ̇]ᵀ\n\nForward Velocity:\n\nẊ = Jtask q̇\n\nInverse Velocity:\n\nq̇ = Jtask⁻¹ Ẋ\n\nActual program solves the equivalent\nnormalized linear system:\n\nA q̇ = b\n\nA = normalized task Jacobian\n\nb = [Vx/Reach, Vy/Reach,\n     Vz/Reach, φ̇]ᵀ\n\nSolver: Gauss-Jordan elimination\n\nω(deg/s) = ω(rad/s) × [[180|π]]\n\nModel estimate only.\n", "rt-graph-index": "\nReach = max(1, L₁ + L₂ + L₃)\n\nJn = [[Jv|Reach]]\n\nC₁, C₂, C₃, C₄ = columns of Jn\n\nm₁₂₃ = det[C₁ C₂ C₃]\nm₁₂₄ = det[C₁ C₂ C₄]\nm₁₃₄ = det[C₁ C₃ C₄]\nm₂₃₄ = det[C₂ C₃ C₄]\n\nPosition index:\n\nSp = clamp(\n    √(m₁₂₃² + m₁₂₄² + m₁₃₄² + m₂₃₄²),\n    0, 1\n)\n\nTask index:\n\nSt = clamp(|m₁₂₃ − m₁₂₄ + m₁₃₄|, 0, 1)\n\nLegacy finite-difference Jacobian:\n\nδ = 0.1 × π/180 rad\n\nJi = [[FK(q + 0.1°eᵢ) − FK(q)|δ]]\n\nUse position columns J1, J2, J3.\n\nSl = clamp([[abs(det(Jfd))|Reach³]], 0, 1)\n\nCombined IK safety index:\n\nS = min(Sl, St)\n\nIf FK/DH residual > 0.001 mm:\nS = 0\n\nNear singularity: S < 0.02\n\nclamp(x,a,b) = min(max(x,a),b)\n\nS is dimensionless.\n", "rt-graph-speed": "\nφ = θ₂ + θ₃ + θ₄\n\nr = L₁ cos(θ₂)\n    + L₂ cos(θ₂ + θ₃)\n    + L₃ cos(θ₂ + θ₃ + θ₄)\n\nX = r cos(θ₁)\n\nY = r sin(θ₁)\n\nZ = H + L₁ sin(θ₂)\n      + L₂ sin(θ₂ + θ₃)\n      + L₃ sin(θ₂ + θ₃ + θ₄)\n\nTCP = [X, Y, Z]\n\n\nΔt = tnow − tprev\n\nVx = [[Xnow − Xprev|Δt]]\n\nVy = [[Ynow − Yprev|Δt]]\n\nVz = [[Znow − Zprev|Δt]]\n\nFirst-order Low-pass Filter:\n\nα = [[Δt|τ + Δt]]\n\nτ = 0.25 s\n\nyf[k] = yf[k−1]\n        + α(yraw[k] − yf[k−1])\n\nFirst valid estimate:\n\nyf[0] = yraw[0]\n\n\nTCP Velocity:\n\nVtcp = √(Vfx² + Vfy² + Vfz²)\n\nUnit: mm/s\n", "rt-graph-accel": "\n\nΔtmid = [[Δtnow + Δtprev|2]]\n\nax = [[Vfx,now − Vfx,prev|Δtmid]]\n\nay = [[Vfy,now − Vfy,prev|Δtmid]]\n\naz = [[Vfz,now − Vfz,prev|Δtmid]]\n\nAraw = √(ax² + ay² + az²)\n\nFirst-order Low-pass Filter:\n\nα = [[Δt|τ + Δt]]\n\nτ = 0.25 s\n\nyf[k] = yf[k−1]\n        + α(yraw[k] − yf[k−1])\n\nFirst valid estimate:\n\nyf[0] = yraw[0]\n\n\nAfiltered = Aprevious\n          + α(Araw − Aprevious)\n\nUnit: mm/s²\n\nDerived from filtered TCP velocity.\n", "rt-graph-joints": "\nθᵢ = Homeᵢ + [[(Ticksᵢ − Zeroᵢ) × Dirᵢ|TPDᵢ]]\n\nDirᵢ ∈ {−1, +1}\n\nθᵢ : degree\nTPDᵢ : ticks/degree\n\n\nΔt = tnow − tprev\n\nωᵢ,raw = [[θᵢ,now − θᵢ,prev|Δt]]\n\nUnit: deg/s\n\nFirst-order Low-pass Filter:\n\nα = [[Δt|τ + Δt]]\n\nτ = 0.25 s\n\nyf[k] = yf[k−1]\n        + α(yraw[k] − yf[k−1])\n\nFirst valid estimate:\n\nyf[0] = yraw[0]\n\n\nωᵢ,filtered = ωᵢ,previous\n    + α(ωᵢ,raw − ωᵢ,previous)\n\nPositive / negative = rotation direction.\n", "rt-graph-j1": "Servo 1 (J1)\n\nθᵢ = Homeᵢ + [[(Ticksᵢ − Zeroᵢ) × Dirᵢ|TPDᵢ]]\n\nDirᵢ ∈ {−1, +1}\n\nθᵢ : degree\nTPDᵢ : ticks/degree\n\n\nΔt = tnow − tprev\n\nωᵢ,raw = [[θᵢ,now − θᵢ,prev|Δt]]\n\nUnit: deg/s\n\nFirst-order Low-pass Filter:\n\nα = [[Δt|τ + Δt]]\n\nτ = 0.25 s\n\nyf[k] = yf[k−1]\n        + α(yraw[k] − yf[k−1])\n\nFirst valid estimate:\n\nyf[0] = yraw[0]\n\n\nωᵢ,filtered = ωᵢ,previous\n    + α(ωᵢ,raw − ωᵢ,previous)\n\nPositive / negative = rotation direction.\n", "rt-graph-j2": "Servo 2 (J2)\n\nθᵢ = Homeᵢ + [[(Ticksᵢ − Zeroᵢ) × Dirᵢ|TPDᵢ]]\n\nDirᵢ ∈ {−1, +1}\n\nθᵢ : degree\nTPDᵢ : ticks/degree\n\n\nΔt = tnow − tprev\n\nωᵢ,raw = [[θᵢ,now − θᵢ,prev|Δt]]\n\nUnit: deg/s\n\nFirst-order Low-pass Filter:\n\nα = [[Δt|τ + Δt]]\n\nτ = 0.25 s\n\nyf[k] = yf[k−1]\n        + α(yraw[k] − yf[k−1])\n\nFirst valid estimate:\n\nyf[0] = yraw[0]\n\n\nωᵢ,filtered = ωᵢ,previous\n    + α(ωᵢ,raw − ωᵢ,previous)\n\nPositive / negative = rotation direction.\n", "rt-graph-j3": "Servo 3 (J3)\n\nθᵢ = Homeᵢ + [[(Ticksᵢ − Zeroᵢ) × Dirᵢ|TPDᵢ]]\n\nDirᵢ ∈ {−1, +1}\n\nθᵢ : degree\nTPDᵢ : ticks/degree\n\n\nΔt = tnow − tprev\n\nωᵢ,raw = [[θᵢ,now − θᵢ,prev|Δt]]\n\nUnit: deg/s\n\nFirst-order Low-pass Filter:\n\nα = [[Δt|τ + Δt]]\n\nτ = 0.25 s\n\nyf[k] = yf[k−1]\n        + α(yraw[k] − yf[k−1])\n\nFirst valid estimate:\n\nyf[0] = yraw[0]\n\n\nωᵢ,filtered = ωᵢ,previous\n    + α(ωᵢ,raw − ωᵢ,previous)\n\nPositive / negative = rotation direction.\n", "rt-graph-j4": "Servo 4 (J4)\n\nθᵢ = Homeᵢ + [[(Ticksᵢ − Zeroᵢ) × Dirᵢ|TPDᵢ]]\n\nDirᵢ ∈ {−1, +1}\n\nθᵢ : degree\nTPDᵢ : ticks/degree\n\n\nΔt = tnow − tprev\n\nωᵢ,raw = [[θᵢ,now − θᵢ,prev|Δt]]\n\nUnit: deg/s\n\nFirst-order Low-pass Filter:\n\nα = [[Δt|τ + Δt]]\n\nτ = 0.25 s\n\nyf[k] = yf[k−1]\n        + α(yraw[k] − yf[k−1])\n\nFirst valid estimate:\n\nyf[0] = yraw[0]\n\n\nωᵢ,filtered = ωᵢ,previous\n    + α(ωᵢ,raw − ωᵢ,previous)\n\nPositive / negative = rotation direction.\n"};
+
+    window.rlFullMathV5 = function(id){
+
+        const block = document.createElement("div");
+
+        block.style.cssText =
+            "margin:16px 0 20px;padding:18px;"+
+            "background:#102b40;"+
+            "border:1px solid #416983;"+
+            "border-radius:10px";
+
+        const title = document.createElement("h3");
+
+        title.textContent =
+            "Full Mathematical Formula - สูตรเต็ม";
+
+        title.style.cssText =
+            "color:#79e8c7;margin:0 0 18px;";
+
+        block.appendChild(title);
+
+        const content = document.createElement("div");
+
+        content.style.cssText =
+            "font-family:Cambria Math,Consolas,monospace;"+
+            "font-size:19px;line-height:1.9;"+
+            "color:#eef7ff;overflow-x:auto;";
+
+        const equation = formulas[id] ||
+            "Formula unavailable";
+
+        for(const line of equation.trim().split("\n")){
+
+            const row = document.createElement("div");
+
+            row.style.cssText =
+                "white-space:pre-wrap;"+
+                "min-height:12px;";
+
+            const pattern =
+                /\[\[([^|]+)\|([^\]]+)\]\]/g;
+
+            let previous = 0;
+
+            for(const item of line.matchAll(pattern)){
+
+                row.appendChild(
+                    document.createTextNode(
+                        line.slice(
+                            previous,
+                            item.index
+                        )
+                    )
+                );
+
+                // Display stacked mathematical fractions.
+
+                const fraction =
+                    document.createElement("span");
+
+                fraction.style.cssText =
+                    "display:inline-flex;"+
+                    "flex-direction:column;"+
+                    "vertical-align:middle;"+
+                    "text-align:center;"+
+                    "margin:4px;line-height:1.4;";
+
+                const top =
+                    document.createElement("span");
+
+                top.textContent = item[1];
+
+                top.style.cssText =
+                    "border-bottom:1.5px solid currentColor;"+
+                    "padding:2px 7px;";
+
+                const bottom =
+                    document.createElement("span");
+
+                bottom.textContent = item[2];
+
+                bottom.style.padding = "2px 7px";
+
+                fraction.append(top,bottom);
+                row.appendChild(fraction);
+
+                previous =
+                    item.index + item[0].length;
+            }
+
+            row.appendChild(
+                document.createTextNode(
+                    line.slice(previous)
+                )
+            );
+
+            content.appendChild(row);
+        }
+
+        block.appendChild(content);
+
+        return block;
+    };
+
+})();
+</script>
+
+
+<script>
+// RL_COMPLETE_ENGINEERING_V6
+
+(() => {
+
+    const original = window.rlFullMathV5;
+
+    const extra = {
+
+        "mp-formula1": `
+Joint Limit Conversion (REAL)
+
+Ta = Ticks_min + 20
+Tb = Ticks_max - 20
+
+θa = Home + (Ta - Zero)*Dir/TPD
+θb = Home + (Tb - Zero)*Dir/TPD
+
+θmin = min(θa, θb)
+θmax = max(θa, θb)
+
+Sample step = (θmax - θmin)/8
+
+20 ticks = software safety margin.
+8 = number of intervals between 9 samples.
+
+SIM uses predefined demo angle limits.
+`,
+
+        "mp-formula3": `
+Path Validation
+
+ei = sqrt(
+    (XFK,i - Xt,i)^2
+  + (YFK,i - Yt,i)^2
+  + (ZFK,i - Zt,i)^2
+)
+
+emax = max(e0, e1, ..., eN)
+
+Smin = min(S0, S1, ..., SN)
+
+Smin >= 0.02
+
+FK residual is a model calculation.
+It is not measured physical positioning error.
+`,
+
+        "mp-formula4": `
+Side Projection
+
+R = sqrt(X² + Y²)
+
+Top view  = (X,Y)
+Side view = (R,Z)
+`,
+
+        "mp-formula7": `
+REAL IK waypoint constraints
+
+Ticks_min + 20 <= Target <= Ticks_max - 20
+
+Delta ticks = abs(Target - Previous)
+
+Delta ticks <= 300
+
+40 <= Velocity RAW <= 800
+
+300 ticks = current REAL IK step check.
+This is separate from manual FK limits.
+`,
+
+        "mp-velocity-equation": `
+REAL Motion Feedback Analysis
+
+Elapsed = (EndTime - StartTime)/1000
+
+Displacement = sqrt(
+    (Xend - Xstart)^2
+  + (Yend - Ystart)^2
+  + (Zend - Zstart)^2
+)
+
+Average net speed = Displacement/Elapsed
+
+Final error = norm(Pend - Ptarget)
+
+Net speed is not total path length / time.
+`,
+
+        "rt-graph-index": `
+Minimum Sampled Singularity
+
+Smin = min(S1, S2, ..., Sn)
+
+Minimum since monitor reset.
+`,
+
+        "rt-graph-joints": `
+Joint Angular Acceleration
+
+dtMid = (dtNow + dtPrevious)/2
+
+Angular acceleration =
+    (omegaNow - omegaPrevious)/dtMid
+
+Unit: deg/s²
+
+The feedback table uses unfiltered values.
+The velocity graphs use filtered values.
+`
+    };
+
+    window.rlFullMathV5 = function(id){
+
+        const block = original(id);
+
+        if(extra[id]){
+
+            const pre = document.createElement("pre");
+
+            pre.style.cssText =
+                "white-space:pre-wrap;"+
+                "font-size:18px;"+
+                "line-height:1.8;"+
+                "color:#eef7ff;"+
+                "max-height:none";
+
+            pre.textContent = extra[id];
+
+            block.appendChild(pre);
+        }
+
+        return block;
+    };
+
+    // =====================================
+    // FK WITH SAVED GEOMETRY
+    // DISPLAY CALCULATION ONLY
+    // =====================================
+
+    function fkAt(q,g){
+
+        const [a,b,c,d] = q.map(v=>v*Math.PI/180);
+
+        const phi = b+c+d;
+
+        const r =
+            g.l1*Math.cos(b)+
+            g.l2*Math.cos(b+c)+
+            g.l3*Math.cos(phi);
+
+        return [
+
+            r*Math.cos(a),
+
+            r*Math.sin(a),
+
+            g.h+
+            g.l1*Math.sin(b)+
+            g.l2*Math.sin(b+c)+
+            g.l3*Math.sin(phi)
+
+        ];
+    }
+
+    // =====================================
+    // SINGULARITY SUBSTITUTION
+    // =====================================
+
+    window.rlV6IndexLines = function(k,q,g){
+
+        if(!k) return [];
+
+        const n = v=>Number.isFinite(v)
+            ? v.toFixed(8)
+            : "--";
+
+        const C = Array.from(
+            {length:4},
+            (_,i)=>k.J.slice(0,3).map(
+                row=>row[i]/k.reach
+            )
+        );
+
+        const m123 = rlDet3(C[0],C[1],C[2]);
+        const m124 = rlDet3(C[0],C[1],C[3]);
+        const m134 = rlDet3(C[0],C[2],C[3]);
+        const m234 = rlDet3(C[1],C[2],C[3]);
+
+        const base = fkAt(q,g);
+
+        const delta = 0.1*Math.PI/180;
+
+        const fd = [0,1,2].map(i=>{
+
+            const next = [...q];
+
+            next[i]+=0.1;
+
+            return fkAt(next,g).map(
+                (v,j)=>(v-base[j])/delta
+            );
+
+        });
+
+        const determinant =
+            rlDet3(fd[0],fd[1],fd[2]);
+
+        const Jfd = [0,1,2].map(
+            i=>fd.map(col=>col[i])
+        );
+
+        return [
+
+            "",
+            "DETAILED JACOBIAN CALCULATION",
+            "การแทนค่าจริงใน Jacobian",
+
+            "",
+            "Source: joint angles + geometry",
+
+            "Reach = max(1, L1+L2+L3)",
+
+            "= max(1, "+g.l1+" + "+
+                g.l2+" + "+g.l3+")",
+
+            "= "+n(k.reach)+" mm",
+
+            "",
+            "Normalized linear Jacobian:",
+
+            rlFormatMatrix(
+                k.J.slice(0,3).map(
+                    r=>r.map(v=>v/k.reach)
+                ),8
+            ),
+
+            "",
+            "3 x 3 determinants:",
+
+            "m123 = "+n(m123),
+            "m124 = "+n(m124),
+            "m134 = "+n(m134),
+            "m234 = "+n(m234),
+
+            "",
+            "Position index:",
+
+            "Sp = clamp(sqrt("+
+                [m123,m124,m134,m234]
+                    .map(v=>"("+n(v)+")^2")
+                    .join(" + ")+"),0,1)",
+
+            "Sp = "+n(k.positionIndex),
+
+            "",
+            "Task index:",
+
+            "St = clamp(abs("+
+                n(m123)+" - ("+
+                n(m124)+") + "+
+                n(m134)+"),0,1)",
+
+            "St = "+n(k.taskIndex),
+
+            "",
+            "Legacy finite-difference Jacobian:",
+            "Angle step = 0.1 degree",
+            "Angle step = "+n(delta)+" rad",
+
+            rlFormatMatrix(Jfd,6),
+
+            "det(Jfd) = "+n(determinant),
+
+            "Sl = clamp(abs(det(Jfd))/Reach^3,0,1)",
+
+            "= clamp(abs("+n(determinant)+")/"+
+                n(k.reach)+"^3,0,1)",
+
+            "Stored legacy result = "+n(k.legacy),
+
+            "",
+            "Combined = min(Sl,St)",
+
+            "Model residual check = "+
+                n(k.fkError)+" mm",
+
+            "If residual > 0.001 mm, index = 0"
+
+        ];
+    };
+
+})();
+</script>
+
+
+<script>
+// RL_LECTURE_KINEMATICS_V7
+
+window.rlSheetV7 = (()=>{
+
+    "use strict";
+
+    const el = id=>document.getElementById(id);
+
+    const RAD = Math.PI/180;
+
+    const colors = [
+        "#8dbaff",
+        "#76e7c4",
+        "#ffd19a",
+        "#c98afa"
+    ];
+
+    const n = (v,d=6)=>
+        Number.isFinite(v)
+        ? v.toFixed(d)
+        : "--";
+
+    const vec = v=>
+        v ? "["+v.map(x=>n(x)).join(", ")+"]" : "--";
+
+    const mat = M=>
+        M ? M.map(r=>vec(r)).join("\n") : "--";
+
+    const valid = v=>
+        Array.isArray(v) &&
+        v.every(Number.isFinite);
+
+    const add = (a,b)=>a.map((v,i)=>v+b[i]);
+
+    const sub = (a,b)=>a.map((v,i)=>v-b[i]);
+
+    const mul = (a,s)=>a.map(v=>v*s);
+
+    const MV = (A,b)=>A.map(
+        r=>r.reduce((s,v,i)=>s+v*b[i],0)
+    );
+
+    const length = a=>Math.hypot(...a);
+
+    const toDeg = a=>a.map(x=>x/RAD);
+
+    function safe(fn){
+
+        try{
+            return fn();
+        }catch(e){
+            console.warn("Lecture V7:",e);
+        }
+    }
+
+    // =====================================
+    // 1. DENAVIT-HARTENBERG / FK
+    // Lecture FK pages 24-26
+    // =====================================
+
+    function kin(q,g){
+
+        const dh = [
+
+            [0,90,g.h,q[0]],
+            [g.l1,0,0,q[1]],
+            [g.l2,0,0,q[2]],
+            [g.l3,0,0,q[3]]
+
+        ];
+
+        let T=[
+            [1,0,0,0],
+            [0,1,0,0],
+            [0,0,1,0],
+            [0,0,0,1]
+        ];
+
+        const A=[];
+        const frames=[T];
+
+        for(const [a,alpha,d,theta] of dh){
+
+            const Ai=rlDH(
+                a,alpha*RAD,d,theta*RAD
+            );
+
+            A.push(Ai);
+
+            T=rlMatMul(T,Ai);
+
+            frames.push(T);
+        }
+
+        const origin=M=>[
+            M[0][3],M[1][3],M[2][3]
+        ];
+
+        const axis=M=>[
+            M[0][2],M[1][2],M[2][2]
+        ];
+
+        const p=origin(T);
+
+        const o=frames.slice(0,4).map(origin);
+
+        const z=frames.slice(0,4).map(axis);
+
+        // =================================
+        // 2. GEOMETRIC JACOBIAN
+        // Lecture Velocity page 9
+        // =================================
+
+        const columns=z.map((zi,i)=>[
+
+            ...rlCross(zi,sub(p,o[i])),
+
+            ...zi
+        ]);
+
+        const J=Array.from(
+            {length:6},
+            (_,i)=>columns.map(c=>c[i])
+        );
+
+        // Robot Lamp task adaptation:
+        // xTask = [X,Y,Z,Pitch]
+
+        const taskJ=[
+            ...J.slice(0,3),
+            [0,1,1,1]
+        ];
+
+        // =================================
+        // 3. SINGULARITY CHECK
+        // Lecture Velocity page 19
+        // =================================
+
+        const C=columns.map(c=>c.slice(0,3));
+
+        const m123=rlDet3(C[0],C[1],C[2]);
+        const m124=rlDet3(C[0],C[1],C[3]);
+        const m134=rlDet3(C[0],C[2],C[3]);
+
+        const determinant=m123-m124+m134;
+
+        const reach=Math.max(
+            1,g.l1+g.l2+g.l3
+        );
+
+        return {
+            q,dh,A,frames,T,p,o,z,J,taskJ,
+            determinant,reach,
+            detNormalized:determinant/reach**3
+        };
+    }
+
+    // =====================================
+    // 4. JACOBIAN TIME DERIVATIVE
+    // Derived from geometric Jacobian
+    // =====================================
+
+    function jacobianDot(k,qd){
+
+        const pd=MV(
+            k.taskJ.slice(0,3),qd
+        );
+
+        const columns=[];
+
+        for(let i=0;i<4;i++){
+
+            let w=[0,0,0];
+            let od=[0,0,0];
+
+            for(let j=0;j<i;j++){
+
+                w=add(
+                    w,
+                    mul(k.z[j],qd[j])
+                );
+
+                od=add(
+                    od,
+                    mul(
+                        rlCross(
+                            k.z[j],
+                            sub(k.o[i],k.o[j])
+                        ),
+                        qd[j]
+                    )
+                );
+            }
+
+            const zd=rlCross(w,k.z[i]);
+
+            const linear=add(
+
+                rlCross(
+                    zd,
+                    sub(k.p,k.o[i])
+                ),
+
+                rlCross(
+                    k.z[i],
+                    sub(pd,od)
+                )
+            );
+
+            columns.push(linear);
+        }
+
+        return [
+
+            ...Array.from(
+                {length:3},
+                (_,i)=>columns.map(c=>c[i])
+            ),
+
+            [0,0,0,0]
+
+        ];
+    }
+
+    // =====================================
+    // 5. INVERSE VELOCITY / ACCELERATION
+    // Lecture Velocity pages 20 and 22
+    // =====================================
+
+    function solve(k,b){
+
+        if(
+            !valid(b) ||
+            Math.abs(k.detNormalized)<1e-10
+        ){
+            throw Error(
+                "Singular task Jacobian"
+            );
+        }
+
+        const A=k.taskJ.map((r,i)=>
+
+            i<3
+                ? r.map(v=>v/k.reach)
+                : [...r]
+
+        );
+
+        const B=b.map((v,i)=>
+
+            i<3 ? v/k.reach : v
+
+        );
+
+        // Equivalent to inverse(J)*B.
+        // Solve using existing Gauss-Jordan.
+
+        return rlSolve4(A,B);
+    }
+
+    // =====================================
+    // 6. FORWARD VELOCITY / ACCELERATION
+    // Lecture Velocity pages 20-21
+    // =====================================
+
+    function forward(k,qd,qdd){
+
+        const Jdot=jacobianDot(k,qd);
+
+        const V=MV(k.taskJ,qd);
+
+        const second=MV(Jdot,qd);
+
+        const first=valid(qdd)
+            ? MV(k.taskJ,qdd)
+            : null;
+
+        const acceleration=first
+            ? add(first,second)
+            : null;
+
+        return {
+            Jdot,
+            V,
+            first,
+            second,
+            acceleration,
+            speed:length(V.slice(0,3)),
+            accel:acceleration
+                ? length(acceleration.slice(0,3))
+                : null
+        };
+    }
+
+    // =====================================
+    // 7. FULL FORMULAS WITH LECTURE SOURCE
+    // =====================================
+
+    const FK=`
+phi = theta2 + theta3 + theta4
+
+r = L1*cos(theta2)
+  + L2*cos(theta2+theta3)
+  + L3*cos(phi)
+
+X = r*cos(theta1)
+Y = r*sin(theta1)
+
+Z = H + L1*sin(theta2)
+      + L2*sin(theta2+theta3)
+      + L3*sin(phi)
+
+T04 = A1*A2*A3*A4
+
+[X,Y,Z] = translation column of T04
+`;
+
+    const IK=`
+R = sqrt(X^2 + Y^2)
+
+u = R - L3*cos(phi)
+
+v = Z - H - L3*sin(phi)
+
+D = (u^2+v^2-L1^2-L2^2)/(2*L1*L2)
+
+|D| <= 1
+
+theta1 = atan2(Y,X)
+
+theta3 = +/- acos(D)
+
+theta2 = atan2(v,u)
+       - atan2(L2*sin(theta3),
+               L1+L2*cos(theta3))
+
+theta4 = phi-theta2-theta3
+
+Elbow up:   +acos(D)
+Elbow down: -acos(D)
+`;
+
+    const DH=`
+Ai = Rz(theta)*Tz(d)*Tx(a)*Rx(alpha)
+
+[ cT  -sT*cA   sT*sA   a*cT ]
+[ sT   cT*cA  -cT*sA   a*sT ]
+[  0      sA      cA      d ]
+[  0       0       0      1 ]
+
+cT = cos(theta), sT = sin(theta)
+cA = cos(alpha), sA = sin(alpha)
+
+T04 = A1*A2*A3*A4
+`;
+
+    const JAC=`
+Ji = [z(i-1) cross (o4-o(i-1))]
+     [z(i-1)                  ]
+
+J = [J1 J2 J3 J4]
+
+Geometric Jacobian = 6 x 4
+
+Task Jacobian = 4 x 4:
+
+[Jx1 Jx2 Jx3 Jx4]
+[Jy1 Jy2 Jy3 Jy4]
+[Jz1 Jz2 Jz3 Jz4]
+[ 0   1   1   1 ]
+
+Task = [X,Y,Z,Pitch]
+`;
+
+    const SING=`
+Lecture criterion:
+
+det(Jtask) = 0
+
+Project normalization:
+
+Reach = max(1,L1+L2+L3)
+
+detNormalized = det(Jtask)/Reach^3
+
+Task index = clamp(abs(detNormalized),0,1)
+
+Position index = sqrt(det(Jn*Jn^T))
+
+Jn = Jv/Reach
+
+Combined safety index = min(Legacy,Task)
+
+0.02 = project safety threshold,
+not a constant from the lecture.
+`;
+
+    const VEL=`
+Forward Velocity:
+
+Xdot = J(q)*qdot
+
+Inverse Velocity:
+
+qdot = inverse(J(q))*Xdot
+
+Jtask must be square and nonsingular.
+
+TCP speed = sqrt(Vx^2+Vy^2+Vz^2)
+
+Joint rates for Jacobian use rad/s.
+`;
+
+    const ACC=`
+Forward Acceleration:
+
+Xddot = J(q)*qddot + Jdot(q)*qdot
+
+Inverse Acceleration:
+
+qddot = inverse(J(q))*
+        (Xddot-Jdot(q)*qdot)
+
+Jdot = dJ(q)/dt
+
+TCP acceleration magnitude:
+
+A = sqrt(ax^2+ay^2+az^2)
+`;
+
+    const CAL=`
+Project servo calibration:
+
+theta = Home+(Ticks-Zero)*Dir/TPD
+
+TPD = ticks per degree
+
+Target ticks =
+round(Zero+(theta-Home)*TPD/Dir)
+`;
+
+    const FILTER=`
+Project feedback estimation:
+
+dt = tNow-tPrevious
+
+omegaRaw = (thetaNow-thetaPrevious)/dt
+
+alpha = dt/(tau+dt)
+
+tau = 0.25 s
+
+omegaFiltered = omegaPrevious
+    +alpha*(omegaRaw-omegaPrevious)
+
+Angular acceleration:
+
+dtMid = (dtNow+dtPrevious)/2
+
+qddot = (omegaNow-omegaPrevious)/dtMid
+`;
+
+    const PATH=`
+d = sqrt(dX^2+dY^2+dZ^2)
+
+s = i/N
+
+Pi = Pstart+s*(Pend-Pstart)
+
+Pitch_i = Pitch_start
+        +s*(Pitch_end-Pitch_start)
+
+Segment length = d/N
+
+Ideal duration = d/RequestedSpeed
+`;
+
+    const info={
+
+        "mp-formula1":[
+            "Step 1 - Configuration Space",
+            "Motion Planning pp.25-32",
+            "q = [theta1,theta2,theta3,theta4]\n"+
+            "thetaMin <= theta <= thetaMax\n"+
+            "Sample angle = Min+k*(Max-Min)/8\n"+
+            "k = 0,...,8\n"+
+            "9^4 = 6561 samples\n"+
+            CAL+FK
+        ],
+
+        "mp-formula2":[
+            "Step 2 - Cartesian Space",
+            "Forward Kinematics pp.24-26",
+            DH+FK
+        ],
+
+        "mp-formula3":[
+            "Step 3 - Transform and Check Workspace",
+            "Inverse Kinematics pp.27-29",
+            IK+SING+
+            "\nPath residual = norm(FK(q)-Target)\n"+
+            "Maximum residual = max(ei)\n"+
+            "Minimum safety index = min(Si)"
+        ],
+
+        "mp-formula4":[
+            "Step 4 - Plot Design Path",
+            "Motion Planning pp.34,40",
+            PATH
+        ],
+
+        "mp-formula5":[
+            "Step 5 - Segment / Interpolate",
+            "Motion Planning pp.34,41",
+            PATH+
+            "\nProject REAL segment rule:\n"+
+            "Smax = clamp(speed*0.25,2,8)\n"+
+            "N = max(1,ceil(d/Smax))\n"+
+            "SIM: N=max(1,ceil(d/5),"+
+            "ceil(abs(dPitch)/3))"
+        ],
+
+        "mp-formula6":[
+            "Step 6 - Inverse Kinematics",
+            "Inverse Kinematics pp.27-29",
+            IK
+        ],
+
+        "mp-formula7":[
+            "Step 7 - Send Command to Motor",
+            "Motion Planning p.44 / project calibration",
+            CAL
+        ],
+
+        "mp-dh-equation":[
+            "Denavit-Hartenberg Parameters",
+            "Forward Kinematics p.24",
+            `a = link length
+alpha = link twist
+d = link offset
+theta = joint angle
+
+Joint    a    alpha    d    theta
+J1       0     90      H    theta1
+J2       L1     0      0    theta2
+J3       L2     0      0    theta3
+J4       L3     0      0    theta4`
+        ],
+
+        "mp-transform-equation":[
+            "Homogeneous Transformation Matrix",
+            "Forward Kinematics pp.25-26",
+            DH
+        ],
+
+        "mp-jacobian-equation":[
+            "Geometric Jacobian",
+            "Velocity Kinematics pp.8-9",
+            JAC
+        ],
+
+        "mp-singularity-equation":[
+            "Singularity Check",
+            "Velocity Kinematics p.19",
+            SING
+        ],
+
+        "mp-velocity-equation":[
+            "Inverse Velocity - Start Pose",
+            "Velocity Kinematics p.20",
+            VEL
+        ],
+
+        "rt-graph-index-formula":[
+            "Project Combined Safety Index",
+            "Velocity Kinematics p.19 / project extension",
+            SING
+        ],
+
+        "rt-graph-speed-formula":[
+            "TCP Velocity - Feedback Difference",
+            "Project numerical estimation",
+            FK+
+            "\nVaxis=(Pnow-Pprevious)/dt\n"+
+            "V=sqrt(Vx^2+Vy^2+Vz^2)\n"+
+            "Low-pass filter applied per axis.\n"+
+            "See Lecture Forward Velocity below."
+        ],
+
+        "rt-graph-accel-formula":[
+            "TCP Acceleration - Feedback Difference",
+            "Project numerical estimation",
+            "dtMid=(dtNow+dtPrevious)/2\n"+
+            "a=(Vnow-Vprevious)/dtMid\n"+
+            "A=sqrt(ax^2+ay^2+az^2)\n"+
+            "Low-pass filter applied to magnitude.\n"+
+            "See Lecture Forward Acceleration below."
+        ],
+
+        "rt-graph-joints-formula":[
+            "Joint Angular Velocity",
+            "Actual feedback / project estimation",
+            CAL+FILTER
+        ]
+    };
+
+    for(let i=1;i<=4;i++){
+
+        info["rt-graph-j"+i+"-formula"]=[
+            "Servo "+i+" - Angular Velocity",
+            "Actual feedback / project estimation",
+            CAL+FILTER
+        ];
+    }
+
+    function installFormulas(){
+
+        for(const [id,item] of Object.entries(info)){
+
+            const pre=el(id);
+
+            if(!pre)continue;
+
+            const host=pre.closest("details");
+
+            if(!host || host.querySelector(
+                ".rl-sheet-formula"
+            ))continue;
+
+            const summary=host.querySelector("summary");
+
+            if(summary){
+
+                summary.textContent=
+                    item[0]+" - Formula / Calculation";
+            }
+
+            const box=document.createElement("div");
+
+            box.className="rl-sheet-formula";
+
+            box.style.cssText=
+                "background:#102b40;padding:16px;"+
+                "border-radius:10px;margin:12px 0";
+
+            const title=document.createElement("h3");
+
+            title.style.color="#79e8c7";
+
+            title.textContent=item[0];
+
+            const source=document.createElement("p");
+
+            source.style.color="#ffd19a";
+
+            source.textContent=
+                "Reference: "+item[1];
+
+            const equation=document.createElement("pre");
+
+            equation.style.cssText=
+                "white-space:pre-wrap;"+
+                "font:17px/1.8 Cambria Math,Consolas;"+
+                "max-height:none;color:#eef7ff";
+
+            equation.textContent=item[2];
+
+            box.append(title,source,equation);
+
+            // Supersede old mathematical presentation.
+            // Preserve original data and calculations.
+
+            for(const child of host.children){
+
+                if(child.firstElementChild?.textContent
+                    ?.startsWith(
+                        "Full Mathematical Formula"
+                    )){
+
+                    child.style.display="none";
+                }
+            }
+
+            if(summary)summary.after(box);
+            else host.prepend(box);
+        }
+    }
+
+    // =====================================
+    // 8. GUI PANELS
+    // =====================================
+
+    function makePanel(page,prefix,real){
+
+        const card=document.createElement("div");
+
+        card.className="card";
+
+        card.id=prefix+"-panel";
+
+        const descriptions=real
+
+            ? [
+                ["det","Singularity Check",
+                    "det(Jtask)/Reach^3"],
+                ["v","Forward Velocity (mm/s)",
+                    "Xdot = J*qdot"],
+                ["a","Forward Acceleration (mm/s²)",
+                    "Xddot = J*qddot + Jdot*qdot"],
+                ["iv","Inverse Velocity (deg/s)",
+                    "qdot = inv(J)*Xdot"],
+                ["ia","Inverse Acceleration (deg/s²)",
+                    "qddot = inv(J)*(Xddot-Jdot*qdot)"]
+              ]
+
+            : [
+                ["det","Singularity Check",
+                    "det(Jtask)/Reach^3"],
+                ["v","Forward Velocity (mm/s)",
+                    "Xdot = J*qdot"],
+                ["a","Forward Acceleration (mm/s²)",
+                    "Xddot = J*qddot + Jdot*qdot"],
+                ["iv","Inverse Velocity (deg/s)",
+                    "qdot = inv(J)*Xdot"],
+                ["ia","Inverse Acceleration (deg/s²)",
+                    "qddot = inv(J)*(Xddot-Jdot*qdot)"]
+              ];
+
+        const note=real
+
+            ? "มุมจาก Servo Feedback จริง "+
+              "ผล TCP เป็นค่าประมาณจากโมเดล "+
+              "เปรียบเทียบกับ finite difference"
+
+            : "การวิเคราะห์ Waypoint "+
+              "ด้วยเวลาและความเร็วแบบอุดมคติ "+
+              "ไม่ใช่ Servo RAW หรือคำสั่งมอเตอร์";
+
+        card.innerHTML=`
+
+            <h2>Lecture Velocity & Acceleration Kinematics</h2>
+
+            <p style="color:#ffd19a">
+                Reference: Velocity Kinematics pp.8-9,19-22
+            </p>
+
+            <p>${note}</p>
+
+            <p style="color:#8dbaff">
+                Blue: feedback-derived difference (REAL)
+            </p>
+
+            <p style="color:#76e7c4">
+                Green: Jacobian model
+            </p>
+
+            ${descriptions.map(([id,title,formula])=>`
+
+                <div style="
+                    margin:20px 0;
+                    padding:14px;
+                    border:1px solid #385a78;
+                    border-radius:12px;
+                ">
+
+                    <h3>${title}</h3>
+
+                    <p style="color:#79e8c7">
+                        ${formula}
+                    </p>
+
+                    <canvas
+                        id="${prefix}-${id}">
+                    </canvas>
+
+                    <div id="${prefix}-${id}-value"
+                        style="color:#79e8c7;
+                        white-space:pre-wrap;
+                        margin-top:12px">
+                        Waiting for data
+                    </div>
+
+                </div>
+            `).join("")}
+
+            <p>
+                J1: Blue | J2: Green |
+                J3: Gold | J4: Purple
+            </p>
+
+            <details>
+
+                <summary style="
+                    color:#ffd19a;
+                    font-weight:bold;
+                    cursor:pointer">
+
+                    Actual Calculation
+                    / ที่มาของตัวเลขและการแทนค่า
+
+                </summary>
+
+                <pre id="${prefix}-detail"
+                    style="
+                    white-space:pre-wrap;
+                    line-height:1.8;
+                    max-height:none">
+
+                    Waiting for valid data
+
+                </pre>
+
+            </details>
+        `;
+
+        if(real){
+
+            page.append(card);
+
+        }else{
+
+            const target=el("mp-kinematics");
+
+            if(target)target.after(card);
+            else page.append(card);
+        }
+    }
+
+    // =====================================
+    // 9. GRAPH RENDERING
+    // Values come from the numerical solver
+    // =====================================
+
+    function graph(id,rows,series,xlabel){
+
+        const canvas=el(id);
+
+        if(!canvas || !canvas.clientWidth)
+            return;
+
+        canvas.width=Math.max(
+            320,canvas.clientWidth
+        );
+
+        canvas.height=260;
+
+        const ctx=canvas.getContext("2d");
+        const w=canvas.width;
+        const h=canvas.height;
+
+        ctx.fillStyle="#081b2e";
+        ctx.fillRect(0,0,w,h);
+
+        const data=rows.filter(
+            r=>Number.isFinite(r.x)
+        );
+
+        const values=series.flatMap(s=>
+            data.map(s.get).filter(Number.isFinite)
+        );
+
+        if(!data.length || !values.length){
+
+            ctx.fillStyle="#a5bcd0";
+            ctx.font="14px Arial";
+            ctx.fillText(
+                "Waiting for valid calculation",20,30
+            );
+
+            return;
+        }
+
+        const xmin=data[0].x;
+
+        const xmax=Math.max(
+            xmin+0.001,data.at(-1).x
+        );
+
+        const ymin=Math.min(0,...values);
+
+        const ymax=Math.max(
+            ymin+0.001,0,...values
+        );
+
+        const margin=(ymax-ymin)*0.08;
+
+        const low=ymin-margin;
+        const high=ymax+margin;
+
+        const X=x=>65+
+            (x-xmin)/(xmax-xmin)*(w-90);
+
+        const Y=y=>h-40-
+            (y-low)/(high-low)*(h-60);
+
+        ctx.font="12px Arial";
+
+        for(let i=0;i<=5;i++){
+
+            const t=i/5;
+
+            const y=20+(h-60)*t;
+            const x=65+(w-90)*t;
+
+            ctx.strokeStyle="#29465e";
+
+            ctx.beginPath();
+            ctx.moveTo(65,y);
+            ctx.lineTo(w-25,y);
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.moveTo(x,20);
+            ctx.lineTo(x,h-40);
+            ctx.stroke();
+
+            ctx.fillStyle="#a5bcd0";
+
+            ctx.textAlign="right";
+
+            ctx.fillText(
+                n(high-(high-low)*t,3),
+                58,y+4
+            );
+
+            ctx.textAlign="center";
+
+            ctx.fillText(
+                n(xmin+(xmax-xmin)*t,2),
+                x,h-21
+            );
+        }
+
+        for(const s of series){
+
+            ctx.strokeStyle=s.color;
+            ctx.fillStyle=s.color;
+            ctx.lineWidth=2;
+
+            ctx.beginPath();
+
+            let prev=null;
+
+            for(const r of data){
+
+                const y=s.get(r);
+
+                if(!Number.isFinite(y)){
+
+                    prev=null;
+                    continue;
+                }
+
+                const x=X(r.x);
+                const py=Y(y);
+
+                if(
+                    !prev ||
+                    prev.segment!==r.segment
+                ){
+                    ctx.moveTo(x,py);
+                }else{
+                    ctx.lineTo(x,py);
+                }
+
+                prev=r;
+            }
+
+            ctx.stroke();
+
+            for(const r of data){
+
+                const y=s.get(r);
+
+                if(!Number.isFinite(y))continue;
+
+                ctx.beginPath();
+                ctx.arc(X(r.x),Y(y),2,0,Math.PI*2);
+                ctx.fill();
+            }
+        }
+
+        ctx.fillStyle="#a5bcd0";
+        ctx.textAlign="center";
+
+        ctx.fillText(xlabel,w/2,h-4);
+    }
+
+    function draw(prefix,data,real){
+
+        const series=(key)=>[
+
+            ...colors.map((color,i)=>({
+
+                color,
+
+                get:r=>r[key]?.[i]
+            }))
+
+        ];
+
+        const xlabel=real
+            ? "Time (s)"
+            : "Ideal plan time (s)";
+
+        graph(prefix+"-det",data,[
+            {color:"#76e7c4",get:r=>r.det}
+        ],xlabel);
+
+        graph(prefix+"-v",data,[
+
+            {color:"#76e7c4",get:r=>r.speed},
+
+            ...(real?[
+                {color:"#8dbaff",get:r=>r.fdSpeed}
+            ]:[])
+
+        ],xlabel);
+
+        graph(prefix+"-a",data,[
+
+            {color:"#76e7c4",get:r=>r.accel},
+
+            ...(real?[
+                {color:"#8dbaff",get:r=>r.fdAccel}
+            ]:[])
+
+        ],xlabel);
+
+        graph(
+            prefix+"-iv",data,series("iv"),xlabel
+        );
+
+        graph(
+            prefix+"-ia",data,series("ia"),xlabel
+        );
+    }
+
+    // =====================================
+    // 10. ACTUAL NUMERIC CALCULATION REPORT
+    // =====================================
+
+    function report(prefix,k,qd,qdd,m,iv,ia,source){
+
+        const out=el(prefix+"-detail");
+
+        if(!out)return;
+
+        const lines=[
+
+            "SOURCE OF VALUES",
+
+            ...source,
+
+            "",
+            "Joint angles (deg) = "+vec(k.q),
+
+            "",
+            "DH parameters: a, alpha, d, theta",
+
+            ...k.dh.map(
+                (r,i)=>"J"+(i+1)+" = "+vec(r)
+            ),
+
+            "",
+            "INDIVIDUAL TRANSFORMATION MATRICES",
+
+            ...k.A.flatMap((a,i)=>[
+                "",
+                "A"+(i+1)+" =",
+                mat(a)
+            ]),
+
+            "",
+            "T04 = A1*A2*A3*A4",
+
+            mat(k.T),
+
+            "",
+            "TCP XYZ = "+vec(k.p)+" mm",
+
+            "",
+            "GEOMETRIC JACOBIAN",
+
+            ...k.z.flatMap((z,i)=>[
+                "",
+                "Axis z"+i+" = "+vec(z),
+                "Origin o"+i+" = "+vec(k.o[i]),
+                "TCP-origin = "+
+                    vec(sub(k.p,k.o[i])),
+                "Linear column = "+
+                    vec(rlCross(
+                        z,sub(k.p,k.o[i])
+                    ))
+            ]),
+
+            "",
+            "J (6x4) =",
+
+            mat(k.J),
+
+            "",
+            "Jtask (4x4) =",
+
+            mat(k.taskJ),
+
+            "",
+            "SINGULARITY CHECK",
+
+            "det(Jtask) = "+n(k.determinant),
+
+            "Reach = "+n(k.reach),
+
+            "detNormalized = "+
+                n(k.determinant)+"/"+
+                n(k.reach)+"^3",
+
+            "= "+n(k.detNormalized,9),
+
+            "",
+            "FORWARD VELOCITY",
+
+            "qdot (rad/s) = "+vec(qd),
+
+            "Xdot = Jtask*qdot",
+
+            "Xdot = "+vec(m?.V),
+
+            "TCP speed = "+n(m?.speed)+" mm/s",
+
+            "",
+            "JACOBIAN TIME DERIVATIVE",
+
+            "Jdot = dJ(q)/dt",
+
+            mat(m?.Jdot),
+
+            "",
+            "FORWARD ACCELERATION",
+
+            "qddot (rad/s²) = "+vec(qdd),
+
+            "J*qddot = "+vec(m?.first),
+
+            "Jdot*qdot = "+vec(m?.second),
+
+            "Xddot = J*qddot + Jdot*qdot",
+
+            "= "+vec(m?.acceleration),
+
+            "TCP acceleration = "+
+                n(m?.accel)+" mm/s²",
+
+            "",
+            "INVERSE VELOCITY",
+
+            "qdot = inverse(J)*Xdot",
+
+            "Result (deg/s) = "+vec(iv),
+
+            "",
+            "INVERSE ACCELERATION",
+
+            "qddot = inverse(J)*(Xddot-Jdot*qdot)",
+
+            "Result (deg/s²) = "+vec(ia),
+
+            "",
+            "Inverse result unavailable when singular",
+            "or blocked by existing safety index.",
+
+            "",
+            "Linear task units: mm, mm/s, mm/s²",
+            "Pitch task units: rad, rad/s, rad/s²"
+        ];
+
+        out.textContent=lines.join("\n");
+    }
+
+    function values(prefix,d){
+
+        const vals={
+
+            det:n(d?.det,9),
+
+            v:n(d?.speed)+" mm/s",
+
+            a:n(d?.accel)+" mm/s²",
+
+            iv:vec(d?.iv)+" deg/s",
+
+            ia:vec(d?.ia)+" deg/s²"
+        };
+
+        for(const [key,value] of Object.entries(vals)){
+
+            const e=el(prefix+"-"+key+"-value");
+
+            if(e)e.textContent=value;
+        }
+    }
+
+    // =====================================
+    // 11. MOTION PLANNING - LECTURE SOLVER
+    // =====================================
+
+    let cachedPlan=null;
+    let planned=[];
+
+    function plan(plan,point){
+
+        if(!plan?.rows?.length)return;
+
+        const rows=plan.rows;
+
+        const start=rows[0].desired;
+        const end=rows.at(-1).desired;
+
+        const delta=[
+            end.x-start.x,
+            end.y-start.y,
+            end.z-start.z
+        ];
+
+        const d=length(delta);
+
+        const speed=plan.goal.velocity;
+
+        const T=d/speed;
+
+        const N=rows.length-1;
+
+        const pitchDelta=(
+            plan.goal.pitch-rows[0].actual.pitch
+        )*RAD;
+
+        if(cachedPlan!==plan){
+
+            cachedPlan=plan;
+
+            planned=rows.map((r,i)=>{
+
+                const k=kin(r.q,plan.g);
+
+                const result={
+
+                    x:i/N*T,
+
+                    segment:0,
+
+                    det:k.detNormalized
+                };
+
+                if(
+                    !Number.isFinite(T) ||
+                    T<=0 ||
+                    !(r.index>=0.02)
+                )return result;
+
+                // Constant-speed Cartesian model.
+                // Not an acceleration ramp or RAW command.
+
+                try{
+
+                    const goalV=[
+                        ...delta.map(v=>v/T),
+                        pitchDelta/T
+                    ];
+
+                    const goalA=[0,0,0,0];
+
+                    const qd=solve(k,goalV);
+
+                    const Jdot=jacobianDot(k,qd);
+
+                    const qdd=solve(
+                        k,
+                        sub(goalA,MV(Jdot,qd))
+                    );
+
+                    const m=forward(k,qd,qdd);
+
+                    Object.assign(result,{
+                        speed:m.speed,
+                        accel:m.accel,
+                        iv:toDeg(qd),
+                        ia:toDeg(qdd),
+                        qd,qdd,
+                        goalV,goalA
+                    });
+
+                }catch(e){
+
+                    result.error=e.message;
+                }
+
+                return result;
+            });
+        }
+
+        const selected=rows[point];
+
+        const result=planned[point];
+
+        if(!selected || !result)return;
+
+        const k=kin(selected.q,plan.g);
+
+        const m=result.qd
+
+            ? forward(k,result.qd,result.qdd)
+
+            : null;
+
+        report(
+            "sheet-mp",
+            k,
+            result.qd,
+            result.qdd,
+            m,
+            result.iv,
+            result.ia,
+            [
+
+                "Selected waypoint P"+point,
+
+                "Geometry H,L1,L2,L3 = "+
+                    vec([
+                        plan.g.h,plan.g.l1,
+                        plan.g.l2,plan.g.l3
+                    ])+" mm",
+
+                "Start XYZ = "+
+                    vec([start.x,start.y,start.z]),
+
+                "Target XYZ = "+
+                    vec([end.x,end.y,end.z]),
+
+                "Delta XYZ = "+vec(delta),
+
+                "Distance = "+n(d)+" mm",
+
+                "Requested speed = "+n(speed)+" mm/s",
+
+                "T = d/speed = "+
+                    n(d)+"/"+n(speed),
+
+                "Ideal duration = "+n(T)+" s",
+
+                "Desired Xdot = "+vec(result.goalV),
+
+                "Desired Xddot = "+vec(result.goalA),
+
+                "",
+                "Constant-speed ideal model.",
+                "No physical startup/stop ramp.",
+                "Not measured servo acceleration.",
+                "Preview only."
+            ]
+        );
+
+        values("sheet-mp",result);
+
+        draw("sheet-mp",planned,false);
+    }
+
+    // =====================================
+    // 12. REAL-TIME - ACTUAL FEEDBACK
+    // =====================================
+
+    function liveModel(row){
+
+        const k=kin(row.q,geom);
+
+        const t=row.formulaTrace;
+
+        const result={
+
+            k,
+
+            det:k.detNormalized,
+
+            x:row.time,
+
+            segment:row.plotSegment
+        };
+
+        if(!t || !valid(t.joints))
+            return result;
+
+        // Actual filtered joint velocity.
+        // Convert deg/s to rad/s for Jacobian.
+
+        const qd=mul(t.joints,RAD);
+
+        const old=t.previousFilter;
+
+        let qdd=null;
+
+        let fdA=null;
+
+        let midDt=null;
+
+        if(
+            old &&
+            valid(old.joints) &&
+            valid(old.vector)
+        ){
+
+            midDt=(t.dt+old.dt)/2;
+
+            if(midDt>0){
+
+                qdd=mul(
+                    sub(t.joints,old.joints),
+                    RAD/midDt
+                );
+
+                fdA=mul(
+                    sub(t.vector,old.vector),
+                    1/midDt
+                );
+            }
+        }
+
+        const m=forward(k,qd,qdd);
+
+        // Independent numerical method of
+        // Cartesian finite differences.
+        // Pitch rate is derived from joint rates.
+
+        const fdV=[
+            ...t.vector,
+            qd[1]+qd[2]+qd[3]
+        ];
+
+        const taskA=fdA && qdd
+            ? [
+                ...fdA,
+                qdd[1]+qdd[2]+qdd[3]
+              ]
+            : null;
+
+        let iv=null,ia=null;
+
+        if(row.index>=0.02){
+
+            try{
+
+                iv=toDeg(solve(k,fdV));
+
+                if(taskA){
+
+                    ia=toDeg(
+                        solve(
+                            k,
+                            sub(taskA,m.second)
+                        )
+                    );
+                }
+
+            }catch(e){
+                console.warn(e.message);
+            }
+        }
+
+        return Object.assign(result,{
+
+            qd,qdd,m,
+            fdV,taskA,midDt,
+            iv,ia,
+
+            speed:m.speed,
+            accel:m.accel,
+
+            fdSpeed:length(t.vector),
+
+            fdAccel:fdA
+                ? length(fdA)
+                : null
+        });
+    }
+
+    function capture(row){
+
+        const d=liveModel(row);
+
+        // Keep only plotted values in history.
+
+        row.sheetV7={
+
+            x:d.x,
+
+            segment:d.segment,
+
+            det:d.det,
+
+            speed:d.speed,
+
+            accel:d.accel,
+
+            fdSpeed:d.fdSpeed,
+
+            fdAccel:d.fdAccel,
+
+            iv:d.iv,
+
+            ia:d.ia
+        };
+    }
+
+    function updateRT(rows){
+
+        const last=rows.at(-1);
+
+        if(!last)return;
+
+        let row=null;
+
+        // Find exact latest filtered calculation,
+        // never use data across feedback gaps.
+
+        for(let i=rows.length-1;i>=0;i--){
+
+            const r=rows[i];
+
+            if(
+                r.plotSegment!==last.plotSegment ||
+                last.t-r.t>2
+            )break;
+
+            if(r.formulaTrace){
+
+                row=r;
+                break;
+            }
+        }
+
+        const selected=row || last;
+
+        const d=liveModel(selected);
+
+        const t=selected.formulaTrace;
+
+        const c=selected.formulaCalibration;
+
+        const lines=[
+
+            "Source: actual Servo Feedback",
+
+            "ESP32 READPOS / Python timestamp",
+
+            "Sample sequence = "+selected.seq,
+
+            "Calculation time = "+
+                n(selected.time)+" s",
+
+            "Ticks = "+vec(selected.ticks),
+
+            "Zero = "+vec(c.zero),
+
+            "Home = "+vec(c.home),
+
+            "Direction = "+vec(c.dirs),
+
+            "TPD = "+vec(c.tpd),
+
+            "",
+            "theta = Home+(Ticks-Zero)*Dir/TPD",
+
+            ...selected.q.map((q,i)=>
+
+                "J"+(i+1)+" = "+c.home[i]+
+                "+("+selected.ticks[i]+"-"+
+                c.zero[i]+")*"+
+                c.dirs[i]+"/"+c.tpd[i]+
+                " = "+n(q)+" deg"
+
+            ),
+
+            "",
+            "H,L1,L2,L3 = "+
+                vec([
+                    geom.h,geom.l1,
+                    geom.l2,geom.l3
+                ])+" mm"
+        ];
+
+        if(t){
+
+            lines.push(
+
+                "",
+                "Previous angle = "+vec(t.previousQ),
+
+                "Current angle = "+vec(selected.q),
+
+                "dt = "+n(t.dt)+" s",
+
+                "Raw angular velocity = "+
+                    vec(t.rawJoints)+" deg/s",
+
+                "LPF alpha = dt/(0.25+dt)",
+
+                "alpha = "+n(t.alpha),
+
+                "Filtered angular velocity = "+
+                    vec(t.joints)+" deg/s",
+
+                "Previous filtered velocity = "+
+                    vec(t.previousFilter?.joints),
+
+                "dtMid = "+n(d.midDt)+" s",
+
+                "",
+                "Inverse input Xdot = "+
+                    vec(d.fdV),
+
+                "Inverse input Xddot = "+
+                    vec(d.taskA),
+
+                "",
+                "Inverse input is a numerical estimate",
+                "from FK and joint feedback.",
+                "It is not independent TCP measurement."
+            );
+        }
+
+        report(
+            "sheet-rt",
+            d.k,
+            d.qd,
+            d.qdd,
+            d.m,
+            d.iv,
+            d.ia,
+            lines
+        );
+
+        values("sheet-rt",d);
+    }
+
+    function drawRT(rows){
+
+        const latest=rows.at(-1)?.time;
+
+        const filtered=rows.filter(r=>
+
+            Number.isFinite(latest) &&
+
+            r.time>=latest-60 &&
+
+            r.formulaTrace &&
+
+            r.sheetV7
+
+        ).map(r=>r.sheetV7);
+
+        draw("sheet-rt",filtered,true);
+
+        // Singularity uses every feedback sample.
+
+        const all=rows.filter(r=>
+            r.time>=latest-60 && r.sheetV7
+        ).map(r=>r.sheetV7);
+
+        graph("sheet-rt-det",all,[
+
+            {color:"#76e7c4",get:r=>r.det}
+
+        ],"Time (s)");
+    }
+
+    function clear(prefix){
+
+        const e=el(prefix+"-detail");
+
+        if(e)e.textContent="Waiting for valid data";
+
+        values(prefix,null);
+    }
+
+    function initMP(page,button){
+
+        installFormulas();
+
+        makePanel(page,"sheet-mp",false);
+
+        button.addEventListener("click",()=>{
+
+            requestAnimationFrame(
+                ()=>draw("sheet-mp",planned,false)
+            );
+
+        });
+    }
+
+    function initRT(page){
+
+        installFormulas();
+
+        makePanel(page,"sheet-rt",true);
+
+        const titles={
+
+            "rt-graph-index":
+                "Combined Safety Index - Project",
+
+            "rt-graph-speed":
+                "TCP Velocity - Feedback Difference",
+
+            "rt-graph-accel":
+                "TCP Acceleration - Feedback Difference",
+
+            "rt-graph-joints":
+                "Joint Angular Velocity - Actual Feedback"
+        };
+
+        for(const [id,title] of Object.entries(titles)){
+
+            const h=el(id)?.closest(".card")
+                ?.querySelector("h2");
+
+            if(h)h.textContent=title;
+        }
+    }
+
+    return {
+
+        safe,
+
+        initMP,
+
+        initRT,
+
+        plan,
+
+        capture,
+
+        updateRT,
+
+        drawRT,
+
+        clearMP:()=>{
+
+            cachedPlan=null;
+
+            planned=[];
+
+            clear("sheet-mp");
+
+            draw("sheet-mp",[],false);
+        },
+
+        clearRT:()=>clear("sheet-rt")
+    };
+
+})();
+</script>
+
 <!-- RL_MOTION_PLANNING_7_STEPS_V1 -->
 
 <style>
@@ -7319,7 +9540,9 @@ Waiting for preview
                     workspaceSamples.push({
                         q:[...q],
                         p:{...p},
-                        g:{...geom}
+                        g:{...geom},
+                        sourceMode:mode,
+                        sourceLimits:limits.map(r=>[...r])
                     });
 
                     workspacePoints.push([
@@ -7635,6 +9858,7 @@ Waiting for preview
             source,
             mode,
             g:JSON.parse(JSON.stringify(geom)),
+            limits:limits.map(r=>[...r]),
             cal:mode==="real"
                 ? IDS.map(id=>({...servo(id)}))
                 : []
@@ -7974,6 +10198,12 @@ Waiting for preview
         const r=r1+r2+r3;
 
         return [
+            "Input Geometry:",
+            "H  = "+g.h+" mm",
+            "L1 = "+g.l1+" mm",
+            "L2 = "+g.l2+" mm",
+            "L3 = "+g.l3+" mm",
+            "",
             "Joint angles:",
             mpAngles(q),
             "",
@@ -8025,8 +10255,28 @@ Waiting for preview
             "  * Direction / Ticks per degree",
             "",
             "Samples = 9^4 = 6561",
+            "Mode = "+sample.sourceMode.toUpperCase(),
+            "",
+            "Joint ranges used in sampling:",
+            ...sample.sourceLimits.map((r,i)=>
+                "J"+(i+1)+" = "+
+                f(r[0],4)+" to "+f(r[1],4)+" deg"
+            ),
+            "",
+
+            "Sampling interval per joint:",
+
+            ...(sample.sourceLimits || []).map(
+                (r,i)=>
+                    "J"+(i+1)+" = ("+
+                    f(r[1],4)+" - "+
+                    f(r[0],4)+") / 8 = "+
+                    f((r[1]-r[0])/8,4)+" deg"
+            ),
+
             "",
             "Selected workspace point:",
+
             "XYZ = ("+mpXYZ(p)+") mm",
             "R = sqrt(X^2 + Y^2)",
             "R = "+f(Math.hypot(p.x,p.y),3)+" mm",
@@ -8046,6 +10296,10 @@ Waiting for preview
         const row=rows[point];
 
         if(!row) return;
+
+        window.rlSheetV7.safe(
+            ()=>window.rlSheetV7.plan(plan,point)
+        );
 
         const start=rows[0].desired;
         const end=rows.at(-1).desired;
@@ -8446,10 +10700,162 @@ Waiting for preview
                 "Model estimate, not measured servo speed."
             );
 
+
             write(
                 "mp-velocity-equation",
                 velocityLines
             );
+
+            const append = (id,lines)=>{
+
+                const el = $(id);
+
+                if(el){
+                    el.textContent +=
+                        "\n"+lines.join("\n");
+                }
+            };
+
+            // Position error / path singularity.
+
+            append("mp-formula3",[
+
+                "",
+                "PATH VALIDATION - ACTUAL VALUES",
+                "Selected point P"+point,
+
+                "",
+                "FK XYZ = "+mpXYZ(row.actual),
+                "Desired XYZ = "+mpXYZ(row.desired),
+
+                "e = sqrt("+
+
+                    ["x","y","z"].map(axis=>
+
+                        "("+f(row.actual[axis],6)+
+                        " - "+
+                        f(row.desired[axis],6)+")^2"
+
+                    ).join(" + ")+")",
+
+                "e = "+f(row.error,8)+" mm",
+
+                "",
+                "Max path residual = "+
+                    f(Math.max(
+                        ...rows.map(r=>r.error)
+                    ),8)+" mm",
+
+                "Min path singularity = "+
+                    f(Math.min(
+                        ...rows.map(r=>r.index??0)
+                    ),8),
+
+                "",
+                "Model result - not collision detection"
+            ]);
+
+            // Joint ranges used by this plan.
+
+            append("mp-formula6",[
+
+                "",
+                "JOINT LIMIT CHECK",
+
+                ...plan.limits.map((r,i)=>
+
+                    "J"+(i+1)+": "+
+                    f(r[0],4)+" <= "+
+                    f(q[i],4)+" <= "+
+                    f(r[1],4)+" deg | "+
+
+                    (
+                        q[i]>=r[0]-1e-6 &&
+                        q[i]<=r[1]+1e-6
+                        ? "PASS"
+                        : "CHECK"
+                    )
+                )
+            ]);
+
+            // Individual DH transformation matrices.
+
+            const matrixLines = [
+
+                "",
+                "INDIVIDUAL DH MATRICES",
+                "Source: saved geometry and waypoint angles"
+            ];
+
+            let cumulative = [
+                [1,0,0,0],
+                [0,1,0,0],
+                [0,0,1,0],
+                [0,0,0,1]
+            ];
+
+            k.dh.forEach((r,i)=>{
+
+                const [a,alpha,d,theta] = r;
+
+                const A = rlDH(
+                    a,
+                    alpha*DEG,
+                    d,
+                    theta*DEG
+                );
+
+                matrixLines.push(
+
+                    "",
+                    "A"+(i+1),
+
+                    "a = "+f(a,4)+" mm",
+                    "d = "+f(d,4)+" mm",
+                    "alpha = "+f(alpha,4)+" deg",
+                    "theta = "+f(theta,4)+" deg",
+
+                    "cos(theta) = "+
+                        f(Math.cos(theta*DEG),6),
+
+                    "sin(theta) = "+
+                        f(Math.sin(theta*DEG),6),
+
+                    "cos(alpha) = "+
+                        f(Math.cos(alpha*DEG),6),
+
+                    "sin(alpha) = "+
+                        f(Math.sin(alpha*DEG),6),
+
+                    "",
+                    rlFormatMatrix(A,6)
+                );
+
+                cumulative = rlMatMul(
+                    cumulative,A
+                );
+
+                matrixLines.push(
+
+                    "",
+                    "T0"+(i+1)+" =",
+
+                    rlFormatMatrix(
+                        cumulative,6
+                    )
+                );
+            });
+
+            append(
+                "mp-transform-equation",
+                matrixLines
+            );
+
+            append(
+                "mp-singularity-equation",
+                window.rlV6IndexLines(k,q,g)
+            );
+
         }
 
     }
@@ -8475,6 +10881,10 @@ Waiting for preview
     function mpClearFormulas(){
 
         mpPlanData=null;
+
+        window.rlSheetV7.safe(
+            ()=>window.rlSheetV7.clearMP()
+        );
 
         $("mp-point-picker").replaceChildren();
 
@@ -8695,7 +11105,13 @@ Waiting for preview
 
     };
 
+
+    // RL_FORMULA_VALUE_SOURCES_V4
+
+    const mpValueSources = {"mp-formula1": ["q = มุมข้อต่อ J1-J4 หน่วยองศา", "Min/Max = ขอบเขต Servo ที่ระบบอ่านได้", "20 ticks = ระยะเผื่อจากขอบเขต Servo ใน REAL", "9 = จำนวนตัวอย่างต่อข้อต่อที่กำหนดในโปรแกรม", "6561 = จำนวนชุดมุมทั้งหมดจาก 9^4", "H, L1, L2, L3 = ค่าจาก Geometry", "XYZ = ผลจาก Forward Kinematics", "R = ระยะในระนาบ XY จาก sqrt(X^2+Y^2)", "จุดบนกราฟเป็นตำแหน่งจำลองจาก FK ไม่ใช่การขยับมอเตอร์จริง"], "mp-formula2": ["J1 = มุมหมุนฐาน", "J2 = มุมแขนส่วนล่าง", "J3 = มุมข้อต่อแขนส่วนบน", "J4 = มุมข้อต่อหัวโคมไฟ", "H = ระยะจากจุดอ้างอิงฐานถึงแกน J2", "L1 = ระยะจากแกน J2 ถึง J3", "L2 = ระยะจากแกน J3 ถึง J4", "L3 = ระยะจากแกน J4 ถึง TCP", "H และ L1-L3 มาจาก Geometry ที่ตั้งไว้", "phi = J2+J3+J4", "r = ระยะฉายในแนวราบแบบมีเครื่องหมาย", "X,Y,Z = ตำแหน่งที่คำนวณจาก FK", "P0 ใช้มุมเริ่มต้น ส่วน P1 เป็นต้นไปใช้มุมจาก IK"], "mp-formula3": ["X,Y,Z = พิกัดเป้าหมายของ Waypoint ที่เลือก", "phi = End pitch ของชุดมุมที่คำนวณได้", "R = sqrt(X^2+Y^2)", "u = ระยะแนวราบของจุดก่อนถึงหัวโคมไฟ", "v = ระยะแนวตั้งของจุดก่อนถึงหัวโคมไฟ", "D = ค่าที่ได้จากกฎโคไซน์", "L1,L2,L3,H = Geometry", "abs(D) <= 1 คือเงื่อนไขทางเรขาคณิต", "0.02 = Singularity threshold ที่กำหนดในโค้ด", "ผ่านเงื่อนไขทางเรขาคณิตไม่ได้แปลว่าปลอดภัยจากการชน"], "mp-formula4": ["Pstart = ตำแหน่งเริ่มต้นจาก FK", "Pend = Target XYZ จาก IK หรือการลาก TCP", "i = ลำดับ Waypoint ที่เลือก", "N = จำนวนช่วงการเคลื่อนที่", "t = i/N เป็นสัดส่วนของเส้นทาง ไม่ใช่เวลาเป็นวินาที", "dX = Xend-Xstart", "dY = Yend-Ystart", "dZ = Zend-Zstart", "สีเขียว = เส้นทางเป้าหมาย", "สีส้ม = ตำแหน่ง FK จากมุมที่ IK คำนวณ"], "mp-formula5": ["dX,dY,dZ = ผลต่างตำแหน่งต้นทางและปลายทาง", "Distance = ระยะทางแบบ Euclidean หน่วย mm", "TCP Speed = ความเร็วที่ผู้ใช้กำหนดในหน้า IK", "0.25 = พารามิเตอร์เวลาในการกำหนดขนาด Segment ของ REAL", "2 และ 8 = ขอบเขตระยะ Segment หน่วย mm", "N = จำนวน Segment ที่ตัววางแผนคำนวณ", "N+1 = จำนวนจุดทั้งหมดเมื่อรวมจุดเริ่มต้น", "Ideal time = Distance / TCP Speed", "Ideal time ไม่ใช่เวลาที่วัดจากหุ่นจริง"], "mp-formula6": ["X,Y,Z = พิกัด Waypoint ที่ต้องการ", "phi = มุมเอียงปลายแขน", "R,u,v,D = ค่าจากการตรวจสอบเรขาคณิตใน Step 3", "J1 = atan2(Y,X) ใช้หามุมฐาน", "J3 = +/- acos(D) ใช้หามุมข้อศอก", "เครื่องหมายขึ้นอยู่กับ Elbow up/down", "J2 = ผลต่างของมุม atan2 สองค่า", "J4 = phi-J2-J3", "FK residual = ระยะระหว่าง FK ของคำตอบกับเป้าหมาย", "P0 เป็นมุมเริ่มต้น ไม่ใช่คำตอบ IK ใหม่"], "mp-formula7": ["Joint angle = ผลจาก Inverse Kinematics", "Zero ticks = ค่าอ้างอิงที่บันทึกด้วย SETZERO", "Home angle = มุมของข้อต่อ ณ จุด Zero", "Direction = ทิศทางการหมุนจาก Calibration", "TicksPerDegree = อัตราแปลงจากองศาเป็น ticks", "Round = ปัดตำแหน่งให้เป็นจำนวนเต็ม", "Plan ticks = ค่าที่อยู่ในแผนสั่งงาน", "Velocity RAW = ค่าความเร็วที่ตั้งสำหรับ Servo แต่ละตัว", "RAW ไม่ใช่ deg/s โดยตรง", "Preview ไม่ส่งคำสั่งให้มอเตอร์"], "mp-dh-equation": ["a = Link length หน่วย mm", "alpha = Link twist หน่วยองศา", "d = Link offset หน่วย mm", "theta = Joint angle หน่วยองศา", "J1 ใช้ a=0, alpha=90, d=H", "J2 ใช้ a=L1, alpha=0, d=0", "J3 ใช้ a=L2, alpha=0, d=0", "J4 ใช้ a=L3, alpha=0, d=0", "H,L1,L2,L3 มาจาก Geometry", "theta มาจากมุมของ Waypoint ที่เลือก"], "mp-transform-equation": ["Ai = Transformation matrix ของข้อต่อ i", "a,alpha,d,theta มาจาก DH Parameters", "sin และ cos มาจากมุมในตาราง DH", "โปรแกรมแปลงองศาเป็น radian ก่อนใช้ตรีโกณมิติ", "T04 = A1*A2*A3*A4", "ส่วนบนซ้าย 3x3 คือ Rotation matrix", "คอลัมน์ที่ 4 สามแถวแรกคือ TCP X,Y,Z", "FK/DH residual ใช้เปรียบเทียบผลจาก FK และ DH"], "mp-jacobian-equation": ["z(i-1) = เวกเตอร์แกนหมุนจาก Transformation", "o(i-1) = ตำแหน่งจุดกำเนิดของ Frame", "pTCP = ตำแหน่งปลายแขนจาก T04", "Jv = ผล Cross product สำหรับความเร็วเชิงเส้น", "Jw = เวกเตอร์แกนหมุนสำหรับความเร็วเชิงมุม", "Geometric Jacobian มีขนาด 6x4", "Task Jacobian มีขนาด 4x4 สำหรับ XYZ และ Pitch", "แถว Pitch คือ [0,1,1,1]", "อัตราเร็วข้อต่อที่ใช้กับ Jacobian มีหน่วย rad/s"], "mp-singularity-equation": ["Reach = max(1,L1+L2+L3)", "Jn = สามแถวความเร็วเชิงเส้นของ Jacobian / Reach", "Position index = คำนวณจาก 3x3 minors ของ Jn", "Task index = ขนาด determinant ของ normalized task Jacobian", "Legacy index = ค่าจาก finite-difference Jacobian ของ J1-J3", "0.1 deg = ระยะเปลี่ยนมุมสำหรับ finite difference", "Combined index = min(Legacy,Task)", "0.001 mm = เกณฑ์ตรวจสอบความต่างระหว่าง FK และ DH", "0.02 = เกณฑ์ป้องกัน Near Singularity", "ค่าดัชนีไม่มีหน่วย ไม่ใช่เปอร์เซ็นต์ความปลอดภัย"], "mp-velocity-equation": ["Distance = ระยะระหว่าง Start และ Target XYZ", "Requested speed = TCP Speed จากหน้า IK", "Duration = Distance / Requested speed", "Vx,Vy,Vz = ผลต่างตำแหน่งแต่ละแกน / Duration", "Pitch rate = ผลต่าง Pitch / Duration", "Reach ใช้ normalize แถวความเร็วเชิงเส้น", "Jtask มาจาก Jacobian ของตำแหน่งเริ่มต้น", "qDot = ผลแก้สมการด้วย Gauss-Jordan", "180/pi = ตัวแปลง rad/s เป็น deg/s", "ผลลัพธ์เป็นความเร็วประมาณจากแบบจำลอง ไม่ใช่ Feedback"]};
+
     function mpAddFormula(anchor,id,initial){
+
 
 
         if(!anchor) return;
@@ -8748,7 +11164,45 @@ Waiting for preview
 
         explanation.textContent = info?.[1] || "";
 
-        box.append(title,pre);
+
+        const sourceTitle =
+            document.createElement("h3");
+
+        sourceTitle.textContent =
+            "Source of Values - ที่มาของตัวเลข";
+
+        sourceTitle.style.color="#ffd19a";
+
+        const sourceText =
+            document.createElement("pre");
+
+        sourceText.style.cssText =
+            "white-space:pre-wrap;"+
+            "line-height:1.8;color:#bcd5e7;"+
+            "max-height:none";
+
+        sourceText.textContent =
+            (mpValueSources[id] || [])
+                .map((s,i)=>(i+1)+". "+s)
+                .join("\n");
+
+        const calcTitle =
+            document.createElement("h3");
+
+        calcTitle.textContent =
+            "Actual Formula / Calculation";
+
+        calcTitle.style.color="#76e7c4";
+
+        box.append(
+            title,
+            window.rlFullMathV5(id),
+            sourceTitle,
+            sourceText,
+            calcTitle,
+            pre
+        );
+
         anchor.after(explanation,box);
 
     }
@@ -8876,6 +11330,10 @@ Waiting for preview
     }
 
     mpInitFormulas();
+
+    window.rlSheetV7.safe(
+        ()=>window.rlSheetV7.initMP(page,button)
+    );
 
 
     console.log("Motion Planning Formulas ready");
@@ -9227,7 +11685,14 @@ Waiting for real feedback
 
     function clearValues(){
 
+        window.rlSheetV7.safe(
+            ()=>window.rlSheetV7.clearRT()
+        );
+
+
         updateEngineeringFormulas(null);
+        rtExtraFormulaV6(null,null);
+
 
         for(const [id] of tiles){
             put(id,"--");
@@ -9371,6 +11836,9 @@ Waiting for real feedback
             alpha,
 
             previousTime:chartAnchor.time,
+            previousTimestamp:chartAnchor.t,
+            previousSequence:chartAnchor.seq,
+            previousTicks:[...chartAnchor.ticks],
 
             previousQ:[...chartAnchor.q],
             previousP:{...chartAnchor.p},
@@ -9505,7 +11973,25 @@ Waiting for real feedback
             tpd:[...geom.ticksPerDegree]
         };
 
+
+        row.rawTraceV6 = previous
+            ? {
+                t:previous.t,
+                dt:previous.dt,
+                p:{...previous.p},
+                q:[...previous.q],
+                ticks:[...previous.ticks],
+                jointV:[...previous.jointV],
+                vxyz:[...previous.vxyz]
+            }
+            : null;
+
         calculateGraphMotion(row);
+
+        window.rlSheetV7.safe(
+            ()=>window.rlSheetV7.capture(row)
+        );
+
 
 
         rows.push(row);
@@ -9888,6 +12374,10 @@ Waiting for real feedback
 
     function redraw(){
 
+        window.rlSheetV7.safe(
+            ()=>window.rlSheetV7.drawRT(rows)
+        );
+
         graph("rt-graph-index",[
             {
                 color:"#76e7c4",
@@ -10066,8 +12556,15 @@ Waiting for real feedback
                     return;
                 }
 
+                window.rlSheetV7.safe(
+                    ()=>window.rlSheetV7.updateRT(rows)
+                );
+
                 display(row,data);
-                updateEngineeringFormulas(row);
+
+                updateEngineeringFormulas(row,data);
+                rtExtraFormulaV6(row,data);
+
 
                 const warning=row.index<0.02;
 
@@ -10237,6 +12734,8 @@ Waiting for real feedback
     // GET only; no additional serial commands.
 
 
+    const rtValueSources = {"rt-graph-index": ["Reach = max(1,L1+L2+L3)", "Jn = สามแถวความเร็วเชิงเส้นของ Jacobian / Reach", "Position index = คำนวณจาก 3x3 minors ของ Jn", "Task index = ขนาด determinant ของ normalized task Jacobian", "Legacy index = ค่าจาก finite-difference Jacobian ของ J1-J3", "0.1 deg = ระยะเปลี่ยนมุมสำหรับ finite difference", "Combined index = min(Legacy,Task)", "0.001 mm = เกณฑ์ตรวจสอบความต่างระหว่าง FK และ DH", "0.02 = เกณฑ์ป้องกัน Near Singularity", "ค่าดัชนีไม่มีหน่วย ไม่ใช่เปอร์เซ็นต์ความปลอดภัย", "มุม J1-J4 มาจาก Actual Servo Feedback", "กราฟนี้คำนวณจากโมเดลของหุ่นยนต์"], "rt-graph-speed": ["Actual ticks อ่านจาก Servo จริง", "q = มุมข้อต่อที่แปลงจาก ticks ด้วย Calibration", "Pnow = FK ของมุมข้อต่อปัจจุบัน", "Pprev = FK ของตัวอย่างก่อนหน้า", "dt = ผลต่าง Timestamp จริง", "Vx = (Xnow-Xprev)/dt", "Vy = (Ynow-Yprev)/dt", "Vz = (Znow-Zprev)/dt", "แต่ละแกนจะผ่าน Low-pass Filter", "tau = 0.25 s", "alpha = dt/(tau+dt)", "TCP speed = sqrt(Vfx^2+Vfy^2+Vfz^2)", "หน่วย mm/s", "เป็นความเร็วประมาณจากตำแหน่ง FK"], "rt-graph-accel": ["Vnow = เวกเตอร์ความเร็ว TCP หลังกรองล่าสุด", "Vprev = เวกเตอร์ความเร็ว TCP หลังกรองก่อนหน้า", "dtNow = ช่วงเวลาที่ใช้คำนวณล่าสุด", "dtPrevious = ช่วงเวลาที่ใช้คำนวณก่อนหน้า", "midDt = (dtNow+dtPrevious)/2", "ax,ay,az = ผลต่างความเร็วแต่ละแกน / midDt", "Magnitude = sqrt(ax^2+ay^2+az^2)", "กรองขนาดความเร่งอีกครั้งก่อนวาดกราฟ", "หน่วย mm/s^2", "ไม่ได้วัดจาก Accelerometer โดยตรง"], "rt-graph-joints": ["Actual ticks = ค่าตำแหน่งจาก Servo จริงผ่าน READPOS", "Previous ticks = ตำแหน่งที่เก็บไว้ก่อนหน้า", "Zero = ค่าอ้างอิงที่บันทึกด้วย SETZERO", "Home = มุมอ้างอิงจาก Calibration", "Dir = ทิศทางหมุน +1 หรือ -1", "TPD = จำนวน ticks ต่อองศาจาก Calibration", "thetaNow = มุมที่คำนวณจาก Actual ticks", "thetaPrev = มุมของตัวอย่างก่อนหน้า", "dt = ผลต่าง Timestamp จาก Python Server", "Angular velocity = ผลต่างมุม / dt", "tau = 0.25 s ค่าคงตัวของ Low-pass Filter", "alpha = dt/(tau+dt)", "Filtered velocity = ค่าความเร็วที่ใช้วาดกราฟ", "ค่าบวกและลบบอกทิศทางของมุม", "ไม่ใช่ค่า Velocity RAW ที่ใช้สั่งมอเตอร์"], "rt-graph-j1": ["Servo 1 (Joint 1)", "Actual ticks = ค่าตำแหน่งจาก Servo จริงผ่าน READPOS", "Previous ticks = ตำแหน่งที่เก็บไว้ก่อนหน้า", "Zero = ค่าอ้างอิงที่บันทึกด้วย SETZERO", "Home = มุมอ้างอิงจาก Calibration", "Dir = ทิศทางหมุน +1 หรือ -1", "TPD = จำนวน ticks ต่อองศาจาก Calibration", "thetaNow = มุมที่คำนวณจาก Actual ticks", "thetaPrev = มุมของตัวอย่างก่อนหน้า", "dt = ผลต่าง Timestamp จาก Python Server", "Angular velocity = ผลต่างมุม / dt", "tau = 0.25 s ค่าคงตัวของ Low-pass Filter", "alpha = dt/(tau+dt)", "Filtered velocity = ค่าความเร็วที่ใช้วาดกราฟ", "ค่าบวกและลบบอกทิศทางของมุม", "ไม่ใช่ค่า Velocity RAW ที่ใช้สั่งมอเตอร์"], "rt-graph-j2": ["Servo 2 (Joint 2)", "Actual ticks = ค่าตำแหน่งจาก Servo จริงผ่าน READPOS", "Previous ticks = ตำแหน่งที่เก็บไว้ก่อนหน้า", "Zero = ค่าอ้างอิงที่บันทึกด้วย SETZERO", "Home = มุมอ้างอิงจาก Calibration", "Dir = ทิศทางหมุน +1 หรือ -1", "TPD = จำนวน ticks ต่อองศาจาก Calibration", "thetaNow = มุมที่คำนวณจาก Actual ticks", "thetaPrev = มุมของตัวอย่างก่อนหน้า", "dt = ผลต่าง Timestamp จาก Python Server", "Angular velocity = ผลต่างมุม / dt", "tau = 0.25 s ค่าคงตัวของ Low-pass Filter", "alpha = dt/(tau+dt)", "Filtered velocity = ค่าความเร็วที่ใช้วาดกราฟ", "ค่าบวกและลบบอกทิศทางของมุม", "ไม่ใช่ค่า Velocity RAW ที่ใช้สั่งมอเตอร์"], "rt-graph-j3": ["Servo 3 (Joint 3)", "Actual ticks = ค่าตำแหน่งจาก Servo จริงผ่าน READPOS", "Previous ticks = ตำแหน่งที่เก็บไว้ก่อนหน้า", "Zero = ค่าอ้างอิงที่บันทึกด้วย SETZERO", "Home = มุมอ้างอิงจาก Calibration", "Dir = ทิศทางหมุน +1 หรือ -1", "TPD = จำนวน ticks ต่อองศาจาก Calibration", "thetaNow = มุมที่คำนวณจาก Actual ticks", "thetaPrev = มุมของตัวอย่างก่อนหน้า", "dt = ผลต่าง Timestamp จาก Python Server", "Angular velocity = ผลต่างมุม / dt", "tau = 0.25 s ค่าคงตัวของ Low-pass Filter", "alpha = dt/(tau+dt)", "Filtered velocity = ค่าความเร็วที่ใช้วาดกราฟ", "ค่าบวกและลบบอกทิศทางของมุม", "ไม่ใช่ค่า Velocity RAW ที่ใช้สั่งมอเตอร์"], "rt-graph-j4": ["Servo 4 (Joint 4)", "Actual ticks = ค่าตำแหน่งจาก Servo จริงผ่าน READPOS", "Previous ticks = ตำแหน่งที่เก็บไว้ก่อนหน้า", "Zero = ค่าอ้างอิงที่บันทึกด้วย SETZERO", "Home = มุมอ้างอิงจาก Calibration", "Dir = ทิศทางหมุน +1 หรือ -1", "TPD = จำนวน ticks ต่อองศาจาก Calibration", "thetaNow = มุมที่คำนวณจาก Actual ticks", "thetaPrev = มุมของตัวอย่างก่อนหน้า", "dt = ผลต่าง Timestamp จาก Python Server", "Angular velocity = ผลต่างมุม / dt", "tau = 0.25 s ค่าคงตัวของ Low-pass Filter", "alpha = dt/(tau+dt)", "Filtered velocity = ค่าความเร็วที่ใช้วาดกราฟ", "ค่าบวกและลบบอกทิศทางของมุม", "ไม่ใช่ค่า Velocity RAW ที่ใช้สั่งมอเตอร์"]};
+
     const graphFormulaInfo = [
 
         [
@@ -10307,11 +12806,184 @@ Waiting for real feedback
 
         pre.textContent = "Waiting for actual feedback";
 
-        box.append(summary,pre);
+
+        const sourceTitle =
+            document.createElement("h3");
+
+        sourceTitle.textContent =
+            "Source of Values - ที่มาของตัวเลข";
+
+        sourceTitle.style.color="#ffd19a";
+
+        const sourceText =
+            document.createElement("pre");
+
+        sourceText.style.cssText =
+            "white-space:pre-wrap;"+
+            "line-height:1.8;"+
+            "color:#bcd5e7;max-height:none";
+
+        sourceText.textContent =
+            (rtValueSources[id] || [])
+                .map((s,i)=>(i+1)+". "+s)
+                .join("\n");
+
+        const calcTitle =
+            document.createElement("h3");
+
+        calcTitle.textContent =
+            "Actual Formula / Calculation";
+
+        calcTitle.style.color="#76e7c4";
+
+        box.append(
+            summary,
+            window.rlFullMathV5(id),
+            sourceTitle,
+            sourceText,
+            calcTitle,
+            pre
+        );
+
         canvas.after(note,box);
     }
 
-    function updateEngineeringFormulas(row){
+
+    const sourceOverview =
+        document.createElement("details");
+
+    sourceOverview.style.cssText =
+        "padding:14px;margin:12px 0;"+
+        "background:#081b2e;"+
+        "border:1px solid #385a78;"+
+        "border-radius:10px";
+
+    const sourceHead =
+        document.createElement("summary");
+
+    sourceHead.textContent =
+        "Source of Live Data - ที่มาของข้อมูลจริง";
+
+    sourceHead.style.cssText =
+        "font-weight:bold;cursor:pointer;"+
+        "color:#ffd19a";
+
+    const sourceBody =
+        document.createElement("pre");
+
+    sourceBody.style.cssText =
+        "white-space:pre-wrap;line-height:1.8;"+
+        "color:#bcd5e7;max-height:none";
+
+    sourceBody.textContent =
+        "Waiting for feedback";
+
+    sourceOverview.append(
+        sourceHead,sourceBody
+    );
+
+    $("rt-vector").after(sourceOverview);
+
+    function updateEngineeringFormulas(row,data){
+
+        if(!row){
+
+            sourceBody.textContent =
+                "Waiting for valid feedback";
+
+        }else{
+
+            const c = row.formulaCalibration;
+            const n = v=>fmt(v,4);
+
+            const lines = [
+                "Actual data source: ESP32 READPOS",
+                "API: /api/kinematics/live",
+                "Sample sequence: "+row.seq,
+                "",
+                "Geometry:",
+                "H = "+geom.h+" mm",
+                "L1 = "+geom.l1+" mm",
+                "L2 = "+geom.l2+" mm",
+                "L3 = "+geom.l3+" mm",
+                "",
+                "Joint angle calibration:",
+                ""
+            ];
+
+            for(let i=0;i<4;i++){
+
+                lines.push(
+                    "Servo "+(i+1),
+                    "theta = Home+(Ticks-Zero)*Dir/TPD",
+                    "= "+n(c.home[i])+" + ("+
+                        row.ticks[i]+" - "+c.zero[i]+
+                        ") * "+c.dirs[i]+
+                        " / "+n(c.tpd[i]),
+                    "= "+n(row.q[i])+" deg",
+                    ""
+                );
+            }
+
+            lines.push(
+                "TCP position = FK(J1,J2,J3,J4)",
+                "X = "+n(row.p.x)+" mm",
+                "Y = "+n(row.p.y)+" mm",
+                "Z = "+n(row.p.z)+" mm",
+                "",
+                "End pitch = J2+J3+J4",
+                "= "+row.q.slice(1)
+                    .map(n).join(" + "),
+                "= "+n(row.p.pitch)+" deg",
+                "",
+                "Feedback age = "+n(data?.age)+" s",
+                "Age = server time - last feedback time",
+                "",
+                "Raw feedback estimates and filtered",
+                "graphs may show different values."
+            );
+
+            try{
+
+                const tx=number("ik-x");
+                const ty=number("ik-y");
+                const tz=number("ik-z");
+
+                const error=Math.hypot(
+                    row.p.x-tx,
+                    row.p.y-ty,
+                    row.p.z-tz
+                );
+
+                lines.push(
+                    "",
+                    "Target XYZ source = IK input",
+                    "Target = "+[tx,ty,tz]
+                        .map(n).join(", ")+" mm",
+                    "",
+                    "Target error:",
+                    "e = sqrt((Xa-Xt)^2+(Ya-Yt)^2+(Za-Zt)^2)",
+                    "= sqrt(("+n(row.p.x-tx)+")^2 + ("+
+                        n(row.p.y-ty)+")^2 + ("+
+                        n(row.p.z-tz)+")^2)",
+                    "= "+n(error)+" mm",
+                    "",
+                    "Requested TCP speed = "+
+                        n(number("ik-speed"))+" mm/s"
+                );
+
+            }catch(e){
+
+                lines.push(
+                    "",
+                    "Target input unavailable"
+                );
+            }
+
+            sourceBody.textContent =
+                lines.join("\n");
+        }
+
 
         const write = (id,lines)=>{
 
@@ -10402,6 +13074,18 @@ Waiting for real feedback
             "Previous position sample = "+
                 n(t.previousTime)+" s",
             "",
+            "Feedback sequence:",
+            "Previous = "+t.previousSequence,
+            "Current = "+r.seq,
+            "",
+            "Timestamp source = Python monotonic clock",
+            "Current timestamp = "+n(r.t)+" s",
+            "Previous timestamp = "+
+                n(t.previousTimestamp)+" s",
+            "",
+            "dt = timestampNow - timestampPrevious",
+            "= "+n(r.t)+" - "+
+                n(t.previousTimestamp),
             "dt = "+n(t.dt)+" s",
             "Filter coefficient = dt/(0.25+dt)",
             "Coefficient = "+n(t.alpha),
@@ -10534,6 +13218,14 @@ Waiting for real feedback
                 "Servo "+(i+1),
 
                 "",
+                "Actual input values:",
+                "Actual ticks = "+r.ticks[i],
+                "Previous ticks = "+t.previousTicks[i],
+                "Zero ticks = "+c.zero[i],
+                "Home angle = "+n(c.home[i])+" deg",
+                "Direction = "+c.dirs[i],
+                "TicksPerDegree = "+n(c.tpd[i]),
+                "",
                 "Joint angle calculation:",
 
                 "theta = Home + (Ticks-Zero)*Dir/TPD",
@@ -10546,6 +13238,13 @@ Waiting for real feedback
 
                 "",
 
+                "Previous angle calculation:",
+                "= "+n(c.home[i])+" + ("+
+                    t.previousTicks[i]+" - "+
+                    c.zero[i]+") * "+
+                    c.dirs[i]+" / "+n(c.tpd[i]),
+                "= "+n(t.previousQ[i])+" deg",
+                "",
                 "Angular velocity = (thetaNow-thetaPrev)/dt",
 
                 "= ("+n(r.q[i])+" - "+
@@ -10584,7 +13283,414 @@ Waiting for real feedback
         write("rt-graph-joints",combined);
     }
 
+
+    const extraBoxV6 = document.createElement("details");
+
+    extraBoxV6.style.cssText =
+        "margin:16px 0;padding:16px;"+
+        "border:1px solid #385a78;"+
+        "border-radius:12px;"+
+        "background:#081b2e";
+
+    const extraHeadV6 =
+        document.createElement("summary");
+
+    extraHeadV6.textContent =
+        "Complete Feedback Formulas - สูตรเพิ่มเติม";
+
+    extraHeadV6.style.cssText =
+        "font-weight:bold;font-size:18px;"+
+        "color:#76e7c4;cursor:pointer";
+
+    const extraPreV6 =
+        document.createElement("pre");
+
+    extraPreV6.id = "rt-complete-formula-v6";
+
+    extraPreV6.style.cssText =
+        "white-space:pre-wrap;line-height:1.9;"+
+        "max-height:none;color:#d9ecff";
+
+    extraPreV6.textContent =
+        "Waiting for actual feedback";
+
+    extraBoxV6.append(
+        extraHeadV6,extraPreV6
+    );
+
+    $("rt-servo-body")
+        .closest("table")
+        .parentElement
+        .after(extraBoxV6);
+
+    function rtExtraFormulaV6(row,data){
+
+        const el = $("rt-complete-formula-v6");
+
+        if(!el) return;
+
+        if(!row){
+
+            el.textContent =
+                "Waiting for valid feedback";
+
+            return;
+        }
+
+        const n = v=>fmt(v,6);
+
+        const prev = row.rawTraceV6;
+
+        const c = row.formulaCalibration;
+
+        const dt = row.dt;
+
+        const midDt =
+
+            prev &&
+            Number.isFinite(dt) &&
+            Number.isFinite(prev.dt)
+
+            ? (dt+prev.dt)/2
+
+            : null;
+
+        const lines = [
+
+            "1. ACTUAL FEEDBACK / ที่มาของข้อมูล",
+
+            "ESP32 READPOS",
+
+            "API: /api/kinematics/live",
+
+            "Sample sequence = "+row.seq,
+
+            "Timestamp = "+n(row.t)+" s",
+
+            "",
+            "2. FEEDBACK AGE",
+
+            "Age = Server time - Feedback timestamp",
+
+            "Age = "+n(data?.age)+" s",
+
+            "Server current timestamp is not returned separately.",
+
+            "",
+            "3. TCP POSITION - FORWARD KINEMATICS",
+
+            "H = "+geom.h+" mm",
+            "L1 = "+geom.l1+" mm",
+            "L2 = "+geom.l2+" mm",
+            "L3 = "+geom.l3+" mm",
+
+            "Joint angles = "+
+                row.q.map(n).join(", ")+" deg",
+
+            "X = "+n(row.p.x)+" mm",
+            "Y = "+n(row.p.y)+" mm",
+            "Z = "+n(row.p.z)+" mm",
+
+            "",
+            "4. RAW TCP VELOCITY",
+
+            "Vaxis = (Pnow-Pprev)/dt"
+        ];
+
+        if(prev && Number.isFinite(dt) && dt>0){
+
+            lines.push(
+
+                "dt = "+n(row.t)+" - "+
+                    n(prev.t),
+
+                "dt = "+n(dt)+" s",
+
+                ""
+            );
+
+            ["x","y","z"].forEach((axis,i)=>{
+
+                lines.push(
+
+                    "V"+axis+" = ("+
+                        n(row.p[axis])+" - "+
+                        n(prev.p[axis])+") / "+
+                        n(dt),
+
+                    "= "+n(row.vxyz[i])+" mm/s"
+                );
+            });
+
+            lines.push(
+
+                "",
+                "Speed = sqrt(Vx^2+Vy^2+Vz^2)",
+
+                "= sqrt("+
+                    row.vxyz.map(
+                        v=>"("+n(v)+")^2"
+                    ).join(" + ")+")",
+
+                "= "+n(row.velocity)+" mm/s"
+            );
+
+        }else{
+
+            lines.push(
+                "No valid previous raw sample."
+            );
+        }
+
+        lines.push(
+
+            "",
+            "5. RAW TCP ACCELERATION",
+
+            "dtMid = (dtNow+dtPrevious)/2",
+
+            "a = (Vnow-Vprevious)/dtMid"
+        );
+
+        if(
+            Number.isFinite(midDt) &&
+            midDt>0 &&
+            row.vxyz.every(Number.isFinite) &&
+            prev.vxyz.every(Number.isFinite)
+        ){
+
+            lines.push(
+
+                "dtMid = ("+
+                    n(dt)+" + "+n(prev.dt)+
+                    ") / 2 = "+n(midDt)+" s"
+            );
+
+            ["x","y","z"].forEach((axis,i)=>{
+
+                lines.push(
+
+                    "a"+axis+" = ("+
+                        n(row.vxyz[i])+" - "+
+                        n(prev.vxyz[i])+") / "+
+                        n(midDt),
+
+                    "= "+
+                        n(
+                            (row.vxyz[i]-
+                            prev.vxyz[i])/midDt
+                        )+" mm/s^2"
+                );
+            });
+
+            lines.push(
+
+                "Acceleration magnitude = "+
+                    n(row.acceleration)+" mm/s^2"
+            );
+
+        }else{
+
+            lines.push(
+                "Waiting for valid velocity estimates"
+            );
+        }
+
+        // Position, raw velocity and acceleration
+        // of all four servos.
+
+        for(let i=0;i<4;i++){
+
+            lines.push(
+
+                "",
+                "6."+ (i+1)+
+                    " SERVO "+(i+1)+" CALCULATION",
+
+                "Source: actual ticks and calibration",
+
+                "theta = Home+(Ticks-Zero)*Dir/TPD",
+
+                "= "+n(c.home[i])+" + ("+
+                    row.ticks[i]+" - "+
+                    c.zero[i]+") * "+
+                    c.dirs[i]+" / "+n(c.tpd[i]),
+
+                "= "+n(row.q[i])+" deg",
+
+                "",
+                "Angular velocity:",
+
+                "omega = (thetaNow-thetaPrev)/dt"
+            );
+
+            if(
+                prev &&
+                Number.isFinite(row.jointV[i])
+            ){
+
+                lines.push(
+
+                    "= ("+n(row.q[i])+" - "+
+                        n(prev.q[i])+") / "+n(dt),
+
+                    "= "+n(row.jointV[i])+" deg/s"
+                );
+
+            }else{
+
+                lines.push(
+                    "No valid raw velocity sample"
+                );
+            }
+
+            lines.push(
+
+                "",
+                "Angular acceleration:",
+
+                "alpha = (omegaNow-omegaPrev)/dtMid"
+            );
+
+            if(
+                prev &&
+                Number.isFinite(midDt) &&
+                Number.isFinite(row.jointA[i])
+            ){
+
+                lines.push(
+
+                    "= ("+
+                        n(row.jointV[i])+" - "+
+                        n(prev.jointV[i])+") / "+
+                        n(midDt),
+
+                    "= "+n(row.jointA[i])+" deg/s^2"
+                );
+
+            }else{
+
+                lines.push(
+                    "No valid acceleration sample"
+                );
+            }
+
+            lines.push(
+
+                "",
+                "Raw velocity (table) = "+
+                    n(row.jointV[i])+" deg/s",
+
+                "Latest filtered estimate (graph) = "+
+                    n(chartEstimate?.joints[i])+
+                    " deg/s",
+
+                "Voltage = "+
+                    n(data?.servos?.[i]?.voltage)+" V",
+
+                "Temperature = "+
+                    n(data?.servos?.[i]?.temperature)+
+                    " C",
+
+                "Voltage and temperature are telemetry.",
+                "They are not calculated by FK or IK."
+            );
+        }
+
+        // Target error from the actual current IK input.
+
+        lines.push(
+
+            "",
+            "7. TARGET POSITION ERROR",
+
+            "e = sqrt((Xa-Xt)^2+(Ya-Yt)^2+(Za-Zt)^2)"
+        );
+
+        try{
+
+            const target=[
+                number("ik-x"),
+                number("ik-y"),
+                number("ik-z")
+            ];
+
+            const actual=[
+                row.p.x,row.p.y,row.p.z
+            ];
+
+            const diff=actual.map(
+                (v,i)=>v-target[i]
+            );
+
+            lines.push(
+
+                "Actual FK XYZ = "+
+                    actual.map(n).join(", ")+" mm",
+
+                "IK Target XYZ = "+
+                    target.map(n).join(", ")+" mm",
+
+                "e = sqrt("+
+                    diff.map(
+                        v=>"("+n(v)+")^2"
+                    ).join(" + ")+")",
+
+                "e = "+n(Math.hypot(...diff))+
+                    " mm",
+
+                "Requested speed = "+
+                    n(number("ik-speed"))+" mm/s"
+            );
+
+        }catch(e){
+
+            lines.push("Target unavailable");
+        }
+
+        lines.push(
+
+            "",
+            "8. MINIMUM SINGULARITY",
+
+            "Smin = minimum since monitor reset",
+
+            "Current = "+n(row.index),
+
+            "Minimum = "+n(minimum?.index),
+
+            "Minimum sample time = "+
+                n(minimum?.time)+" s",
+
+            "",
+            "All TCP results are model estimates",
+            "derived from actual servo feedback."
+        );
+
+        el.textContent = lines.join("\n");
+
+        // Add numeric determinants to singularity graph.
+
+        const indexFormula =
+            $("rt-graph-index-formula");
+
+        if(indexFormula && row.engineering){
+
+            indexFormula.textContent += "\n"+
+                window.rlV6IndexLines(
+                    row.engineering,
+                    row.q,
+                    geom
+                ).join("\n");
+        }
+    }
+
+    window.rlSheetV7.safe(
+        ()=>window.rlSheetV7.initRT(page)
+    );
+
     setInterval(sample,350);
+
 
 
     sample();
@@ -11732,6 +14838,7 @@ Waiting for real feedback
             geom,
 
             get("ik-speed").value,
+            get("ik-raw-speed").value,
             get("ik-auto-pitch")?.checked,
 
             IDS.map(id=>{
@@ -15487,5 +18594,54 @@ Waiting for real feedback
 })();
 </script>
 
+
+<script>
+(() => {
+
+    const speed = document.getElementById("ik-speed");
+
+    if(!speed) return;
+
+    try {
+
+        const saved = localStorage.getItem(
+            "robot_lamp_ik_tcp_speed"
+        );
+
+        if(saved !== null){
+
+            const value = Number(saved);
+
+            if(Number.isFinite(value) &&
+               value >= 1 && value <= 600){
+
+                speed.value = value;
+            }
+        }
+
+        speed.addEventListener("change",()=>{
+
+            const value = Number(speed.value);
+
+            if(Number.isFinite(value) &&
+               value >= 1 && value <= 600){
+
+                localStorage.setItem(
+                    "robot_lamp_ik_tcp_speed",
+                    String(value)
+                );
+            }
+
+        });
+
+    }catch(e){
+        console.warn(e);
+    }
+
+})();
+</script>
+
 </body>
 </html>
+
+<!-- RL_HIDE_XYZ_INPUT_V1 -->

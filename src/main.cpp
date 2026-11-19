@@ -1015,7 +1015,9 @@ bool moveServo(
         manualFK ? FK_MANUAL_MIN_MARGIN : SAFE_MARGIN;
 
     const int maxStep =
-        manualFK ? FK_MANUAL_MAX_STEP : MAX_MANUAL_STEP;
+        manualFK
+            ? FK_MANUAL_MAX_STEP
+            : (id == 2 ? 600 : MAX_MANUAL_STEP);
 
     if (
         target < lo + minMargin ||
