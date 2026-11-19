@@ -150,7 +150,7 @@ function main(){
         </p>
 
         <small>
-            Drag XYZ arrows or select J1-J4
+            Drag XYZ arrows, planes, or center for free motion. Select J1-J4
             and drag its rotation ring.
             Release to execute when enabled.
             No collision detection.
@@ -853,7 +853,7 @@ function main(){
 
         if(
             selected==="tcp"
-                ? !["X","Y","Z"].includes(axis)
+                ? !["X","Y","Z","XY","XZ","YZ","XYZ"].includes(axis)
                 : axis!=="Z"
         ){
             drag=null;
@@ -870,6 +870,12 @@ function main(){
             position:handle.position.clone(),
             rotation:handle.quaternion.clone(),
             delta:0,
+            offset:new THREE.Vector3(),
+            target:handle.position.clone(),
+            oldValues:[
+                "ik-x","ik-y","ik-z",
+                "ik-pitch","ik-elbow"
+            ].map(id=>get(id).value),
             execute:realEnable.checked
         };
 
@@ -884,30 +890,37 @@ function main(){
 
         if(!drag) return;
 
+
         if(drag.selected==="tcp"){
 
-            const a=drag.axis.toLowerCase();
+            // RL_MULTI_AXIS_TCP_V1
 
-            
-            // RL_FREE_TCP_DRAG_V1
-            // Allow continuous Cartesian dragging.
-            drag.delta =
-                handle.position[a] -
-                drag.position[a];
+            const target=handle.position.clone();
 
+            drag.offset.copy(target)
+                .sub(drag.position);
 
-            const target=drag.position.clone();
+            drag.delta=drag.offset.length();
 
-            target[a]+=drag.delta;
-
-            handle.position.copy(target);
+            drag.target.copy(target);
 
             marker.position.copy(target);
             marker.visible=true;
 
+            get("ik-x").value=
+                target.x.toFixed(3);
+
+            get("ik-y").value=
+                target.y.toFixed(3);
+
+            get("ik-z").value=
+                target.z.toFixed(3);
+
             status(
-                "TCP "+drag.axis+": "+
-                drag.delta.toFixed(2)+" mm"
+                "TCP "+drag.axis+
+                " | X: "+target.x.toFixed(1)+
+                " | Y: "+target.y.toFixed(1)+
+                " | Z: "+target.z.toFixed(1)+" mm"
             );
 
         }else{
@@ -967,7 +980,17 @@ function main(){
 
         if(sending) return;
 
-        if(Math.abs(state.delta)<0.3) return;
+        if(Math.abs(state.delta)<0.3){
+            if(state.selected==="tcp"){
+                ["ik-x","ik-y","ik-z"].forEach(
+                    (id,i)=>{
+                        get(id).value=state.oldValues[i];
+                    }
+                );
+            }
+            marker.visible=false;
+            return;
+        }
 
         sending=true;
 
@@ -979,7 +1002,9 @@ function main(){
             "ik-pitch","ik-elbow"
         ];
 
-        const oldValues=fields.map(id=>get(id).value);
+        const oldValues=
+            state.oldValues ||
+            fields.map(id=>get(id).value);
 
         let accepted=false;
 
@@ -1029,13 +1054,13 @@ function main(){
                 const p=fk(q);
 
                 const target={
-                    x:p.x,y:p.y,z:p.z
+                    x:state.target.x,
+                    y:state.target.y,
+                    z:state.target.z
                 };
 
                 const a=
                     state.axis.toLowerCase();
-
-                target[a]+=state.delta;
 
                 get("ik-x").value=
                     target.x.toFixed(3);
@@ -1055,16 +1080,19 @@ function main(){
                 // X/Y retain pitch.
                 // Z preserves existing Auto Head.
 
-                auto.checked=
-                    a==="z" && oldAuto;
+                // RL_AUTO_HEAD_FREE_XYZ_V1
+                auto.checked = oldAuto;
 
                 if(typeof rlAxisIntent!=="undefined"){
 
-                    rlAxisIntent={
-                        axis:a,
-                        mode,
-                        target:{...target}
-                    };
+                    rlAxisIntent=
+                        ["x","y","z"].includes(a)
+                        ? {
+                            axis:a,
+                            mode,
+                            target:{...target}
+                        }
+                        : null;
                 }
 
                 const goal=getIK();
@@ -1088,7 +1116,7 @@ function main(){
                     throw Error("IK target mismatch");
                 }
 
-                if(mode==="real"){
+                if(mode==="real" && !goal._rlValidatedPath){
                     planRealIK(goal);
                 }
 
@@ -1272,7 +1300,17 @@ function main(){
         "pointercancel",
         ()=>{
 
+            if(drag?.selected==="tcp"){
+                ["ik-x","ik-y","ik-z"].forEach(
+                    (id,i)=>{
+                        get(id).value=drag.oldValues[i];
+                    }
+                );
+            }
+
             drag=null;
+            marker.visible=false;
+            ghost.visible=false;
 
             if(gizmo.dragging){
                 gizmo.pointerUp({button:0});

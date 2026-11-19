@@ -3719,6 +3719,7 @@ function rlProbeAxisXYZ(p,axis) {
 }
 
 
+// RL_FAST_IK_RESPONSE_V1
 function rlBaseGetIK() {
 
     const p = {
@@ -3877,7 +3878,7 @@ function rlBaseGetIK() {
             if (mode === "real") {
 
                 // Preserve existing safety checks.
-                planRealIK(goal);
+                goal._rlValidatedPath = planRealIK(goal);
 
             } else {
 
@@ -4072,14 +4073,15 @@ function getIK() {
 
     const vertical = rlAxisIsVertical(p,start);
 
+    // RL_AUTO_HEAD_FREE_XYZ_V1
+
     const turns = [0];
 
-    // Expand the search, retain 30 deg cap.
+    // Search alternative end pitches in all directions.
+    // These are IK candidates, not direct servo commands.
 
-    for (let angle=1; vertical && angle<=30; angle++) {
-
-        turns.push(angle,-angle);
-
+    for (let angle = 1; angle <= 180; angle++) {
+        turns.push(angle, -angle);
     }
 
     const preferred = vertical
@@ -4091,15 +4093,18 @@ function getIK() {
                 Math.cos(
                     (direction*90-start.pitch)*DEG
                 )
-            )/DEG,
-            -30,30
+            ) / DEG,
+            -180, 180
         )
         : 0;
 
-    turns.sort(
-        (a,b)=>
-            Math.abs(a-preferred) -
-            Math.abs(b-preferred)
+    // Prefer small orientation changes.
+    // Use the requested direction as a preference only.
+
+    turns.sort((a,b) =>
+        Math.abs(a) - Math.abs(b) ||
+        Math.abs(a-preferred) -
+        Math.abs(b-preferred)
     );
 
     let lastError = originalError.message;
@@ -4133,22 +4138,8 @@ function getIK() {
 
             const pitch = start.pitch+turn;
 
-            // Prefer head rotation in Z direction.
-            // A fixed pitch is also permitted.
-
-            if (vertical) {
-
-                const improvement =
-                    direction * (
-                        Math.sin(pitch*DEG) -
-                        Math.sin(start.pitch*DEG)
-                    );
-
-                if (improvement < -0.000001) {
-                    continue;
-                }
-
-            }
+            // Allow either pitch direction
+            // when required to reach XYZ safely.
 
             try {
 
@@ -4172,7 +4163,7 @@ function getIK() {
 
                 if (mode === "real") {
 
-                    planRealIK(goal);
+                    goal._rlValidatedPath = planRealIK(goal);
 
                 } else {
 
@@ -4575,7 +4566,11 @@ async function moveIKReal() {
 
         await refresh();
         const goal = getIK();
-        const path = planRealIK(goal);
+        
+        const path =
+            goal._rlValidatedPath ??
+            planRealIK(goal);
+
 
         try {
             window.rlMotionPlanCapture?.(goal,path);
@@ -7452,6 +7447,7 @@ Waiting for preview
                 q,
                 ticks,
                 index:singularityIndex(q),
+                engineering:rlKinData(q),
                 error:Math.hypot(
                     actual.x-desired.x,
                     actual.y-desired.y,
@@ -8281,7 +8277,181 @@ Waiting for preview
             );
         }
 
+
         mpWrite("mp-formula7",motorLines);
+
+        // P0 is the start pose, not a new IK solution.
+
+        if(point===0){
+
+            mpWrite("mp-formula6",[
+                "P0 = Initial joint feedback / model",
+                "No new IK solution calculated at P0.",
+                "",
+                mpAngles(q),
+                "",
+                ...mpFKFormula(q,g)
+            ]);
+        }
+
+        const k = row.engineering;
+
+        if(k){
+
+            const write = (id,lines)=>{
+                if($(id)) mpWrite(id,lines);
+            };
+
+            write("mp-dh-equation",[
+                "Selected waypoint P"+point,
+                "",
+                "DH parameters: a, alpha, d, theta",
+                "a,d = mm | alpha,theta = deg",
+                "",
+                "J       a       alpha       d       theta",
+                ...k.dh.map((r,i)=>
+                    "J"+(i+1)+"   "+
+                    r.map(v=>f(v,3)).join("   ")
+                )
+            ]);
+
+            write("mp-transform-equation",[
+                "Selected waypoint P"+point,
+                "",
+                "Ai = Rz(theta)*Tz(d)*Tx(a)*Rx(alpha)",
+                "T04 = A1*A2*A3*A4",
+                "",
+                "Calculated T04:",
+                rlFormatMatrix(k.T,5),
+                "",
+                "TCP XYZ from translation column:",
+                k.tcp.map(v=>f(v,4)).join(", ")+" mm",
+                "",
+                "FK / DH residual = "+f(k.fkError,8)+" mm"
+            ]);
+
+            write("mp-jacobian-equation",[
+                "Selected waypoint P"+point,
+                "",
+                "Jv_i = z(i-1) cross (pTCP-o(i-1))",
+                "Jw_i = z(i-1)",
+                "J = [Jv; Jw]",
+                "",
+                "Calculated geometric Jacobian (6 x 4):",
+                rlFormatMatrix(k.J,5),
+                "",
+                "Task Jacobian (X,Y,Z,Pitch):",
+                rlFormatMatrix(k.taskJ,5),
+                "",
+                "Joint rates in rad/s for Jacobian calculation."
+            ]);
+
+            write("mp-singularity-equation",[
+                "Selected waypoint P"+point,
+                "",
+                "Reach = max(1,L1+L2+L3)",
+                "Reach = "+f(k.reach,3)+" mm",
+                "",
+                "Jn = Jv / Reach",
+                "Position index = clamp(sqrt(det(Jn*Jn^T)),0,1)",
+                "Position index = "+f(k.positionIndex,6),
+                "",
+                "Task index = clamp(abs(det(Jtask_normalized)),0,1)",
+                "Task index = "+f(k.taskIndex,6),
+                "",
+                "Legacy index = abs(det(J123_fd))/Reach^3",
+                "Finite difference = 0.1 deg",
+                "Legacy index = "+f(k.legacy,6),
+                "",
+                "Combined = min(Legacy,Task)",
+                "Combined = min("+f(k.legacy,6)+
+                    ", "+f(k.taskIndex,6)+")",
+                "",
+                "Actual safety index = "+f(row.index,6),
+                "Invalid model or FK/DH mismatch > 0.001 mm returns 0.",
+                "Threshold = 0.02"
+            ]);
+
+            // Same equation used by the existing
+            // inverse velocity preview, for the start pose.
+
+            const ks = rows[0].engineering;
+
+            const velocityLines = [
+                "Initial joint velocity estimate",
+                "",
+                "V = J*qDot",
+                "Solve: Jtask_normalized*qDot = V_normalized",
+                "Duration = Distance / Requested speed",
+                "Duration = "+f(distance,4)+
+                    " / "+f(speed,4)+" s"
+            ];
+
+            try{
+
+                if(!ks || distance<0.001 ||
+                    rows[0].index<0.02){
+
+                    throw Error(
+                        "Valid non-singular start pose required"
+                    );
+                }
+
+                const duration = distance/speed;
+
+                const V = [
+                    dx/duration/ks.reach,
+                    dy/duration/ks.reach,
+                    dz/duration/ks.reach,
+                    (plan.goal.pitch-rows[0].actual.pitch)
+                    *DEG/duration
+                ];
+
+                const A = ks.taskJ.map((r,i)=>
+                    i<3
+                        ? r.map(v=>v/ks.reach)
+                        : [...r]
+                );
+
+                const qDot = rlSolve4(A,V);
+
+                velocityLines.push(
+                    "",
+                    "Duration = "+f(duration,4)+" s",
+                    "Normalized task velocity:",
+                    V.map(v=>f(v,6)).join(", "),
+                    "",
+                    "Calculated joint velocity:"
+                );
+
+                qDot.forEach((v,i)=>
+
+                    velocityLines.push(
+                        "J"+(i+1)+" = "+
+                        f(v,6)+" rad/s = "+
+                        f(v/DEG,4)+" deg/s"
+                    )
+                );
+
+            }catch(e){
+
+                velocityLines.push(
+                    "",
+                    "Unavailable: "+e.message
+                );
+            }
+
+            velocityLines.push(
+                "",
+                "Model estimate, not measured servo speed."
+            );
+
+            write(
+                "mp-velocity-equation",
+                velocityLines
+            );
+        }
+
     }
 
     // =====================================
@@ -8458,7 +8628,75 @@ Waiting for preview
 
     // RL_COLLAPSIBLE_FORMULAS_V1
 
+
+    // RL_ENGINEERING_FORMULAS_V3
+
+    const engineeringInfo = {
+
+        "mp-formula1": [
+            "Configuration Space / Forward Kinematics",
+            "คำนวณพื้นที่ที่หุ่นสามารถเอื้อมถึงจากมุมข้อต่อและ Joint Limit"
+        ],
+
+        "mp-formula2": [
+            "Cartesian Space / Forward Kinematics",
+            "แปลงมุม Servo เป็นตำแหน่ง TCP ในแกน X Y Z"
+        ],
+
+        "mp-formula3": [
+            "Reachability / Singularity",
+            "ตรวจสอบระยะที่แขนสามารถเข้าถึงและตำแหน่งเอกฐาน"
+        ],
+
+        "mp-formula4": [
+            "Linear Cartesian Path",
+            "สร้างเส้นทางตรงจากตำแหน่งเริ่มต้นไปยังเป้าหมาย"
+        ],
+
+        "mp-formula5": [
+            "Distance / Linear Interpolation",
+            "คำนวณระยะทาง จำนวน Waypoints และเวลาในทางทฤษฎี"
+        ],
+
+        "mp-formula6": [
+            "Analytical Inverse Kinematics",
+            "คำนวณมุม J1-J4 จาก XYZ และ End Pitch"
+        ],
+
+        "mp-formula7": [
+            "Joint Angle to Servo Ticks",
+            "แปลงมุมข้อต่อเป็นตำแหน่ง ticks สำหรับสั่ง Servo"
+        ],
+
+        "mp-dh-equation": [
+            "Standard Denavit-Hartenberg Parameters",
+            "กำหนดความสัมพันธ์ระหว่าง Coordinate Frame ของแต่ละข้อต่อ"
+        ],
+
+        "mp-transform-equation": [
+            "Homogeneous Transformation Matrix",
+            "คำนวณเมทริกซ์ตำแหน่งและทิศทางของ TCP"
+        ],
+
+        "mp-jacobian-equation": [
+            "Geometric Jacobian",
+            "แปลงความเร็วเชิงมุมข้อต่อเป็นความเร็วของปลายแขน"
+        ],
+
+        "mp-singularity-equation": [
+            "Jacobian Singularity Index",
+            "ตรวจสอบความสามารถในการเคลื่อนที่ของหุ่นยนต์"
+        ],
+
+        "mp-velocity-equation": [
+            "Inverse Velocity Kinematics",
+            "คำนวณความเร็วเชิงมุมของข้อต่อจากความเร็ว TCP"
+        ]
+
+    };
+
     function mpAddFormula(anchor,id,initial){
+
 
         if(!anchor) return;
 
@@ -8475,7 +8713,13 @@ Waiting for preview
 
         const title = document.createElement("summary");
 
-        title.textContent = "Formula / Calculation";
+
+        const info = engineeringInfo[id];
+
+        title.textContent = info
+            ? info[0] + " - Formula / Calculation"
+            : "Formula / Calculation";
+
 
         title.style.cssText =
             "color:#76e7c4;"+
@@ -8497,8 +8741,16 @@ Waiting for preview
 
         pre.textContent = initial;
 
+
+        const explanation = document.createElement("p");
+
+        explanation.className = "muted";
+
+        explanation.textContent = info?.[1] || "";
+
         box.append(title,pre);
-        anchor.after(box);
+        anchor.after(explanation,box);
+
     }
 
     function mpInitFormulas(){
@@ -8779,7 +9031,7 @@ Waiting for preview
 
         <div class="card">
 
-            <h2>TCP Velocity (mm/s)</h2>
+            <h2>TCP Velocity - Filtered (mm/s)</h2>
 
             <canvas id="rt-graph-speed"></canvas>
 
@@ -8791,7 +9043,7 @@ Waiting for preview
 
         <div class="card">
 
-            <h2>TCP Acceleration (mm/s2)</h2>
+            <h2>TCP Acceleration - Filtered (mm/s2)</h2>
 
             <canvas id="rt-graph-accel"></canvas>
 
@@ -8799,7 +9051,7 @@ Waiting for preview
 
         <div class="card">
 
-            <h2>Joint Angular Velocity (deg/s)</h2>
+            <h2>Joint Angular Velocity - Filtered (deg/s)</h2>
 
             <canvas id="rt-graph-joints"></canvas>
 
@@ -8814,7 +9066,55 @@ Waiting for preview
 
         <div class="card">
 
+
+            <h2>Individual Servo Angular Velocity</h2>
+
+            <p class="muted">
+                Actual feedback | Filtered angular velocity
+            </p>
+
+            <div style="
+                display:grid;
+                grid-template-columns:
+                    repeat(auto-fit,minmax(300px,1fr));
+                gap:16px;
+                margin:16px 0;
+            ">
+
+                ${[1,2,3,4].map((id,i)=>`
+
+                    <div class="rt-tile"
+                         style="min-width:0">
+
+                        <h3 style="color:${
+                            ["#8dbaff","#76e7c4",
+                             "#ffd19a","#c98afa"][i]
+                        }">
+                            Servo ${id} (J${id})
+                        </h3>
+
+                        <div class="rt-value"
+                             id="rt-jv-${id}">
+                            -- deg/s
+                        </div>
+
+                        <canvas
+                            id="rt-graph-j${id}">
+                        </canvas>
+
+                    </div>
+
+                `).join("")}
+
+            </div>
+
+            <p class="muted">
+                Positive / negative = rotation direction.
+                Real feedback gaps are not interpolated.
+            </p>
+
             <h2>Actual Servo Feedback</h2>
+
 
             <div style="overflow:auto">
                 <table>
@@ -8867,7 +9167,20 @@ Waiting for real feedback
     let boot=null;
     let calibrationKey=null;
     let origin=null;
+
     let fetching=false;
+
+    // RL_REALTIME_SERVO_GRAPHS_V2
+
+    const GRAPH_MIN_DT = 0.15;
+    const GRAPH_MAX_GAP = 2.0;
+    const GRAPH_FILTER_TAU = 0.25;
+
+    let chartLast = null;
+    let chartAnchor = null;
+    let chartEstimate = null;
+    let chartSegment = 0;
+
 
     const MAX_ROWS=20000;
 
@@ -8899,6 +9212,11 @@ Waiting for real feedback
 
         rows=[];
         previous=null;
+
+        chartLast=null;
+        chartAnchor=null;
+        chartEstimate=null;
+        chartSegment=0;
         minimum=null;
         origin=null;
         cursor=-1;
@@ -8909,6 +9227,8 @@ Waiting for real feedback
 
     function clearValues(){
 
+        updateEngineeringFormulas(null);
+
         for(const [id] of tiles){
             put(id,"--");
         }
@@ -8918,6 +9238,10 @@ Waiting for real feedback
         }
 
         put("rt-vector","");
+
+        for(let i=1;i<=4;i++){
+            put("rt-jv-"+i,"-- deg/s");
+        }
 
         put(
             "rt-formula",
@@ -8931,7 +9255,141 @@ Waiting for real feedback
     // LIVE KINEMATICS CALCULATION
     // =================================
 
+
+    function calculateGraphMotion(row){
+
+        row.plotVelocity = null;
+        row.plotAcceleration = null;
+        row.plotJoints = [null,null,null,null];
+
+        // Preserve actual data gaps.
+
+        if(chartLast){
+
+            const gap = row.t-chartLast.t;
+
+            if(
+                row.seq !== chartLast.seq+1 ||
+                !Number.isFinite(gap) ||
+                gap <= 0 ||
+                gap > GRAPH_MAX_GAP
+            ){
+                chartAnchor = null;
+                chartEstimate = null;
+                chartSegment++;
+            }
+        }
+
+        chartLast = row;
+        row.plotSegment = chartSegment;
+
+        if(!chartAnchor){
+            chartAnchor = row;
+            return;
+        }
+
+        const dt = row.t-chartAnchor.t;
+
+        // Accumulate closely spaced feedback readings.
+        if(dt < GRAPH_MIN_DT){
+            return;
+        }
+
+        const rawVector = ["x","y","z"].map(
+            axis =>
+                (row.p[axis]-chartAnchor.p[axis])/dt
+        );
+
+        const rawJoints = row.q.map(
+            (angle,i) =>
+                (angle-chartAnchor.q[i])/dt
+        );
+
+        const alpha =
+            dt/(GRAPH_FILTER_TAU+dt);
+
+        const smooth = (oldValue,newValue) =>
+            oldValue+alpha*(newValue-oldValue);
+
+        const priorEstimate = chartEstimate;
+
+        const vector = rawVector.map((value,i)=>
+            chartEstimate
+                ? smooth(chartEstimate.vector[i],value)
+                : value
+        );
+
+        const joints = rawJoints.map((value,i)=>
+            chartEstimate
+                ? smooth(chartEstimate.joints[i],value)
+                : value
+        );
+
+        const velocity = Math.hypot(...vector);
+
+        let acceleration = null;
+
+        if(chartEstimate){
+
+            const midDt =
+                (dt+chartEstimate.dt)/2;
+
+            const accelerationVector = vector.map(
+                (value,i)=>
+                    (value-chartEstimate.vector[i])
+                    /midDt
+            );
+
+            const rawAcceleration =
+                Math.hypot(...accelerationVector);
+
+            acceleration =
+                Number.isFinite(chartEstimate.acceleration)
+                    ? smooth(
+                        chartEstimate.acceleration,
+                        rawAcceleration
+                    )
+                    : rawAcceleration;
+        }
+
+        chartEstimate = {
+            vector,
+            joints,
+            velocity,
+            acceleration,
+            dt
+        };
+
+        row.plotVelocity = velocity;
+        row.plotAcceleration = acceleration;
+
+        row.plotJoints = [...joints];
+
+        row.formulaTrace = {
+
+            dt,
+            alpha,
+
+            previousTime:chartAnchor.time,
+
+            previousQ:[...chartAnchor.q],
+            previousP:{...chartAnchor.p},
+
+            rawVector:[...rawVector],
+            rawJoints:[...rawJoints],
+
+            vector:[...vector],
+            joints:[...joints],
+
+            previousFilter:priorEstimate
+        };
+
+        chartAnchor = row;
+
+    }
+
     function calculate(sample){
+
 
         const q=sample.ticks.map((tick,i)=>
 
@@ -9036,6 +9494,20 @@ Waiting for real feedback
             minimum=row;
         }
 
+
+        row.engineering = rlKinData(row.q);
+
+        row.formulaCalibration = {
+
+            zero:[...sample.zero],
+            home:[...geom.homeAngles],
+            dirs:[...geom.dirs],
+            tpd:[...geom.ticksPerDegree]
+        };
+
+        calculateGraphMotion(row);
+
+
         rows.push(row);
 
         if(rows.length>MAX_ROWS){
@@ -9059,6 +9531,17 @@ Waiting for real feedback
                 : "#76e7c4";
 
         put("rt-speed",fmt(row.velocity,2));
+
+        for(let i=0;i<4;i++){
+
+            const value =
+                chartEstimate?.joints[i];
+
+            put(
+                "rt-jv-"+(i+1),
+                fmt(value,2)+" deg/s"
+            );
+        }
 
         put("rt-accel",fmt(row.acceleration,2));
 
@@ -9208,7 +9691,12 @@ Waiting for real feedback
     // LIVE GRAPHS
     // =================================
 
-    function graph(id,series,threshold=null){
+    function graph(
+        id,
+        series,
+        threshold=null,
+        filtered=false
+    ){
 
         const canvas=$(id);
 
@@ -9338,15 +9826,31 @@ Waiting for real feedback
                 const v=s.get(r);
 
                 if(!Number.isFinite(v)){
-                    open=false;
-                    before=null;
+
+                    // Skip short sampling intervals.
+                    // Never invent a measurement.
+
+                    if(!filtered){
+                        open=false;
+                        before=null;
+                    }
+
                     continue;
                 }
 
                 if(
                     !open ||
-                    r.seq!==before.seq+1 ||
-                    r.t-before.t>5
+                    (
+                        filtered
+                        ? (
+                            r.plotSegment !== before.plotSegment ||
+                            r.t-before.t > GRAPH_MAX_GAP
+                          )
+                        : (
+                            r.seq!==before.seq+1 ||
+                            r.t-before.t>5
+                          )
+                    )
                 ){
                     ctx.moveTo(X(r.time),Y(v));
                 }else{
@@ -9394,24 +9898,39 @@ Waiting for real feedback
         graph("rt-graph-speed",[
             {
                 color:"#76e7c4",
-                get:r=>r.velocity
+                get:r=>r.plotVelocity
             }
-        ]);
+        ],null,true);
 
         graph("rt-graph-accel",[
             {
                 color:"#ffd19a",
-                get:r=>r.acceleration
+                get:r=>r.plotAcceleration
             }
-        ]);
+        ],null,true);
 
         graph(
             "rt-graph-joints",
             colors.map((color,i)=>({
                 color,
-                get:r=>r.jointV[i]
-            }))
+                get:r=>r.plotJoints[i]
+            })),
+            null,true
         );
+
+        // Draw individual servo velocity graphs.
+
+        for(let i=0;i<4;i++){
+
+            graph(
+                "rt-graph-j"+(i+1),
+                [{
+                    color:colors[i],
+                    get:r=>r.plotJoints[i]
+                }],
+                null,true
+            );
+        }
 
         if(!minimum){
             put("rt-min","Waiting for feedback");
@@ -9468,8 +9987,8 @@ Waiting for real feedback
 
             if(!data.ready){
 
-                previous=null;
-                cursor=-1;
+                // Keep cursor for buffered sample recovery.
+
 
                 clearValues();
 
@@ -9548,6 +10067,7 @@ Waiting for real feedback
                 }
 
                 display(row,data);
+                updateEngineeringFormulas(row);
 
                 const warning=row.index<0.02;
 
@@ -9577,8 +10097,8 @@ Waiting for real feedback
 
         }catch(e){
 
-            previous=null;
-            cursor=-1;
+            // Preserve history on temporary API failures.
+            // Recover from the last successful cursor.
 
             clearValues();
 
@@ -9716,7 +10236,356 @@ Waiting for real feedback
     // Keep collecting while FK/IK is open.
     // GET only; no additional serial commands.
 
+
+    const graphFormulaInfo = [
+
+        [
+            "rt-graph-index",
+            "Jacobian Singularity Index",
+            "ตรวจสอบตำแหน่งเอกฐาน"
+        ],
+
+        [
+            "rt-graph-speed",
+            "TCP Linear Velocity",
+            "คำนวณความเร็วปลายแขนจากตำแหน่ง XYZ"
+        ],
+
+        [
+            "rt-graph-accel",
+            "TCP Linear Acceleration",
+            "คำนวณอัตราการเปลี่ยนความเร็วปลายแขน"
+        ],
+
+        [
+            "rt-graph-joints",
+            "Joint Angular Velocity",
+            "คำนวณความเร็วเชิงมุมของ Servo ทั้ง 4 ตัว"
+        ],
+
+        ...[1,2,3,4].map(id=>[
+            "rt-graph-j"+id,
+            "Servo "+id+" - Angular Velocity",
+            "คำนวณจากมุมข้อต่อที่อ่านได้จริง"
+        ])
+    ];
+
+    for(const [id,title,description] of graphFormulaInfo){
+
+        const canvas = $(id);
+
+        if(!canvas) continue;
+
+        const note = document.createElement("p");
+
+        note.className = "muted";
+        note.textContent = description;
+
+        const box = document.createElement("details");
+
+        box.style.cssText =
+            "margin:12px 0;padding:12px;"+
+            "background:#081b2e;"+
+            "border:1px solid #385a78;"+
+            "border-radius:10px";
+
+        const summary = document.createElement("summary");
+
+        summary.textContent =
+            title+" - Formula / Calculation";
+
+        summary.style.cssText =
+            "color:#76e7c4;cursor:pointer;font-weight:bold";
+
+        const pre = document.createElement("pre");
+
+        pre.id = id+"-formula";
+
+        pre.style.cssText =
+            "white-space:pre-wrap;line-height:1.8;"+
+            "max-height:none;color:#d9ecff";
+
+        pre.textContent = "Waiting for actual feedback";
+
+        box.append(summary,pre);
+        canvas.after(note,box);
+    }
+
+    function updateEngineeringFormulas(row){
+
+        const write = (id,lines)=>{
+
+            const el = $(id+"-formula");
+
+            if(el) el.textContent=lines.join("\n");
+        };
+
+        const n = v=>fmt(v,4);
+
+        if(!row){
+
+            for(const [id] of graphFormulaInfo){
+
+                write(id,[
+                    "Waiting for valid actual feedback"
+                ]);
+            }
+
+            return;
+        }
+
+        const k = row.engineering;
+
+        if(k){
+
+            write("rt-graph-index",[
+                "Actual sample time = "+n(row.time)+" s",
+                "",
+                "Jn = Jv / Reach",
+                "Reach = "+n(k.reach)+" mm",
+                "",
+                "Position index = "+n(k.positionIndex),
+                "Task index = "+n(k.taskIndex),
+                "Legacy index = "+n(k.legacy),
+                "",
+                "Combined = min(Legacy,Task)",
+                "Combined = min("+n(k.legacy)+
+                    ", "+n(k.taskIndex)+")",
+                "",
+                "Actual safety index = "+n(row.index),
+                "FK/DH residual = "+n(k.fkError)+" mm",
+                "Invalid model / mismatch > 0.001 mm returns 0.",
+                "Threshold = 0.02"
+            ]);
+        }
+
+        // Use the latest valid filtered calculation,
+        // never fill a real feedback gap.
+
+        let r = null;
+
+        for(let i=rows.length-1;i>=0;i--){
+
+            const candidate = rows[i];
+
+            if(candidate.plotSegment!==row.plotSegment ||
+                row.t-candidate.t>GRAPH_MAX_GAP){
+
+                break;
+            }
+
+            if(candidate.formulaTrace){
+                r=candidate;
+                break;
+            }
+        }
+
+        if(!r){
+
+            for(const [id] of graphFormulaInfo){
+
+                if(id==="rt-graph-index") continue;
+
+                write(id,[
+                    "Waiting for valid velocity samples"
+                ]);
+            }
+
+            return;
+        }
+
+        const t = r.formulaTrace;
+        const old = t.previousFilter;
+
+        const common = [
+            "Calculated sample = "+n(r.time)+" s",
+            "Previous position sample = "+
+                n(t.previousTime)+" s",
+            "",
+            "dt = "+n(t.dt)+" s",
+            "Filter coefficient = dt/(0.25+dt)",
+            "Coefficient = "+n(t.alpha),
+            ""
+        ];
+
+        const filterLine = (prev,raw,result)=>
+
+            Number.isFinite(prev)
+                ? n(prev)+" + "+n(t.alpha)+
+                  "*("+n(raw)+" - "+n(prev)+
+                  ") = "+n(result)
+                : "First estimate = "+n(result);
+
+        const speedLines = [...common];
+
+        ["x","y","z"].forEach((axis,i)=>{
+
+            speedLines.push(
+
+                "V"+axis+" = (Pnow-Pprev)/dt",
+
+                "= ("+n(r.p[axis])+" - "+
+                    n(t.previousP[axis])+") / "+n(t.dt),
+
+                "= "+n(t.rawVector[i])+" mm/s",
+
+                "Filtered V"+axis+" = "+
+                    filterLine(
+                        old?.vector[i],
+                        t.rawVector[i],
+                        t.vector[i]
+                    ),
+
+                ""
+            );
+        });
+
+        speedLines.push(
+
+            "TCP speed = sqrt(Vfx^2+Vfy^2+Vfz^2)",
+
+            "= sqrt("+t.vector.map(
+                v=>"("+n(v)+")^2"
+            ).join(" + ")+")",
+
+            "= "+n(r.plotVelocity)+" mm/s"
+        );
+
+        write("rt-graph-speed",speedLines);
+
+        // Acceleration from the exact filtered vectors.
+
+        const accelerationLines = [...common];
+
+        if(old){
+
+            const midDt = (t.dt+old.dt)/2;
+
+            const accelerationVector = t.vector.map(
+                (v,i)=>(v-old.vector[i])/midDt
+            );
+
+            const rawAcceleration =
+                Math.hypot(...accelerationVector);
+
+            accelerationLines.push(
+
+                "midDt = (dtNow+dtPrevious)/2",
+
+                "= ("+n(t.dt)+" + "+
+                    n(old.dt)+") / 2",
+
+                "= "+n(midDt)+" s",
+                ""
+            );
+
+            ["x","y","z"].forEach((axis,i)=>{
+
+                accelerationLines.push(
+
+                    "a"+axis+" = (Vnow-Vprev)/midDt",
+
+                    "= ("+n(t.vector[i])+" - "+
+                        n(old.vector[i])+") / "+n(midDt),
+
+                    "= "+n(accelerationVector[i])+" mm/s^2",
+                    ""
+                );
+            });
+
+            accelerationLines.push(
+
+                "Magnitude = sqrt(ax^2+ay^2+az^2)",
+
+                "= "+n(rawAcceleration)+" mm/s^2",
+
+                "Filtered magnitude = "+
+                    filterLine(
+                        old.acceleration,
+                        rawAcceleration,
+                        r.plotAcceleration
+                    ),
+
+                "Result = "+n(r.plotAcceleration)+" mm/s^2"
+            );
+
+        }else{
+
+            accelerationLines.push(
+
+                "Waiting for previous velocity estimate"
+            );
+        }
+
+        write("rt-graph-accel",accelerationLines);
+
+        // Individual Servo formula and substitution.
+
+        const combined = [...common];
+
+        for(let i=0;i<4;i++){
+
+            const c = r.formulaCalibration;
+
+            const lines = [
+
+                ...common,
+
+                "Servo "+(i+1),
+
+                "",
+                "Joint angle calculation:",
+
+                "theta = Home + (Ticks-Zero)*Dir/TPD",
+
+                "= "+n(c.home[i])+" + ("+
+                    r.ticks[i]+" - "+c.zero[i]+") * "+
+                    c.dirs[i]+" / "+n(c.tpd[i]),
+
+                "= "+n(r.q[i])+" deg",
+
+                "",
+
+                "Angular velocity = (thetaNow-thetaPrev)/dt",
+
+                "= ("+n(r.q[i])+" - "+
+                    n(t.previousQ[i])+") / "+n(t.dt),
+
+                "= "+n(t.rawJoints[i])+" deg/s",
+
+                "",
+
+                "Low-pass filter:",
+
+                filterLine(
+                    old?.joints[i],
+                    t.rawJoints[i],
+                    t.joints[i]
+                ),
+
+                "",
+
+                "Displayed velocity = "+
+                    n(r.plotJoints[i])+" deg/s"
+            ];
+
+            write("rt-graph-j"+(i+1),lines);
+
+            combined.push(
+                "J"+(i+1)+":",
+                "Raw = ("+n(r.q[i])+" - "+
+                    n(t.previousQ[i])+") / "+n(t.dt),
+                "Raw = "+n(t.rawJoints[i])+" deg/s",
+                "Filtered = "+n(t.joints[i])+" deg/s",
+                ""
+            );
+        }
+
+        write("rt-graph-joints",combined);
+    }
+
     setInterval(sample,350);
+
 
     sample();
 
